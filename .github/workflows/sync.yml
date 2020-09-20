@@ -2,8 +2,7 @@ name: Sync
 
 on:
   schedule:
-    - cron: '*/1 * * * *' # every 30 minutes
-  workflow_dispatch: # on button click
+    - cron: '*/1 * * * *'
 
 jobs:
   sync:
@@ -16,4 +15,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           owner: dothq
           base: release
-          head: master
+          head: release
