@@ -16,6 +16,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           owner: dothq
           base: release
-          head: master
+          head: release 
           pr_title: "🦊 Sync changes from Firefox"
-          pr_message: "Hi,\nI've ✨ automagically ✨ made this PR so you can merge in the latest Firefox Stable changes.\nThere may be conflicts so you'll need to resolve them.\nMany thanks,\n🤖\n*ps: i'll let my friends know too: @EnderDev @AwesomeTech10*" 
+          pr_message: "Hi,\n\nI've ✨ automagically ✨ made this PR so you can merge in the latest Firefox Stable changes.\n\nThere may be conflicts so you'll need to resolve them.\n\nMany thanks,\n\n🤖\n\n*ps: i'll let my friends know too: @EnderDev @AwesomeTech10*" 
