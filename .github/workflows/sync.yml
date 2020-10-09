@@ -19,3 +19,12 @@ jobs:
           head: release 
           pr_title: "🦊 Sync changes from Firefox"
           pr_message: "Hi,\n\nI've ✨ automagically ✨ made this PR so you can merge in the latest Firefox Stable changes.\n\nThere may be conflicts so you'll need to resolve them.\n\nMany thanks,\n\n🤖\n\n*ps: i'll let my friends know too: @EnderDev @AwesomeTech10*" 
+          
+      - uses: TG908/fork-sync@v1.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          owner: mozilla
+          base: master
+          head: master 
+          pr_title: "🦊 Sync master changes from Firefox"
+          pr_message: "Hi,\n\nI've ✨ automagically ✨ made this PR so you can merge in the latest Firefox changes.\n\nThere may be conflicts so you'll need to resolve them.\n\nMany thanks,\n\n🤖\n\n*ps: i'll let my friends know too: @EnderDev @AwesomeTech10*" 
