@@ -1,4 +1,4 @@
-name: Sync Master
+name: "Sync Master"
 
 on:
   schedule:
