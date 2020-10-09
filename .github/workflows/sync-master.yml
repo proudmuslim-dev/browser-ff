@@ -1,0 +1,21 @@
+name: Sync
+
+on:
+  schedule:
+    - cron: '*/1 * * * *' # every minute
+  workflow_dispatch: # manually run sync
+  
+jobs:
+  sync:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: TG908/fork-sync@v1.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          owner: mozilla
+          base: master
+          head: master 
+          pr_title: "🦊 Sync master changes from Firefox"
+          pr_message: "Hi,\n\nI've ✨ automagically ✨ made this PR so you can merge in the latest Firefox Nightly changes.\n\nThere may be conflicts so you'll need to resolve them.\n\nMany thanks,\n\n🤖\n\n*ps: i'll let my friends know too: @EnderDev @AwesomeTech10*" 
