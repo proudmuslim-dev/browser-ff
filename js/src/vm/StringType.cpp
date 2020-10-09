@@ -702,8 +702,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
       MOZ_ASSERT(str->isRope());
       while (str != leftMostRope) {
         if (b == WithIncrementalBarrier) {
-          JSString::writeBarrierPre(str->d.s.u2.left);
-          JSString::writeBarrierPre(str->d.s.u3.right);
+          gc::PreWriteBarrier(str->d.s.u2.left);
+          gc::PreWriteBarrier(str->d.s.u3.right);
         }
         JSString* child = str->d.s.u2.left;
         // 'child' will be post-barriered during the later traversal.
@@ -713,8 +713,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
         str = child;
       }
       if (b == WithIncrementalBarrier) {
-        JSString::writeBarrierPre(str->d.s.u2.left);
-        JSString::writeBarrierPre(str->d.s.u3.right);
+        gc::PreWriteBarrier(str->d.s.u2.left);
+        gc::PreWriteBarrier(str->d.s.u3.right);
       }
       str->setNonInlineChars(wholeChars);
       uint32_t left_len = left.length();
@@ -761,8 +761,8 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
   pos = wholeChars;
 first_visit_node : {
   if (b == WithIncrementalBarrier) {
-    JSString::writeBarrierPre(str->d.s.u2.left);
-    JSString::writeBarrierPre(str->d.s.u3.right);
+    gc::PreWriteBarrier(str->d.s.u2.left);
+    gc::PreWriteBarrier(str->d.s.u3.right);
   }
 
   JSString& left = *str->d.s.u2.left;
@@ -1238,47 +1238,6 @@ template bool JSLinearString::isIndexSlow(const Latin1Char* s, size_t length,
 
 template bool JSLinearString::isIndexSlow(const char16_t* s, size_t length,
                                           uint32_t* indexp);
-
-/*
- * Declare length-2 strings. We only store strings where both characters are
- * alphanumeric. The lower 10 short chars are the numerals, the next 26 are
- * the lowercase letters, and the next 26 are the uppercase letters.
- */
-
-constexpr Latin1Char StaticStrings::fromSmallChar(SmallChar c) {
-  if (c < 10) {
-    return c + '0';
-  }
-  if (c < 36) {
-    return c + 'a' - 10;
-  }
-  if (c < 62) {
-    return c + 'A' - 36;
-  }
-  if (c == 62) {
-    return '$';
-  }
-  return '_';
-}
-
-constexpr StaticStrings::SmallChar StaticStrings::toSmallChar(uint32_t c) {
-  if (mozilla::IsAsciiDigit(c)) {
-    return c - '0';
-  }
-  if (mozilla::IsAsciiLowercaseAlpha(c)) {
-    return c - 'a' + 10;
-  }
-  if (mozilla::IsAsciiUppercaseAlpha(c)) {
-    return c - 'A' + 36;
-  }
-  if (c == '$') {
-    return 62;
-  }
-  if (c == '_') {
-    return 63;
-  }
-  return StaticStrings::INVALID_SMALL_CHAR;
-}
 
 constexpr StaticStrings::SmallCharArray StaticStrings::createSmallCharArray() {
   SmallCharArray array{};
@@ -2200,7 +2159,7 @@ UniqueChars js::EncodeLatin1(JSContext* cx, JSString* str) {
 
   JS::AutoCheckCannotGC nogc;
   if (linear->hasTwoByteChars()) {
-    Latin1CharsZ chars =
+    JS::Latin1CharsZ chars =
         JS::LossyTwoByteCharsToNewLatin1CharsZ(cx, linear->twoByteRange(nogc));
     return UniqueChars(chars.c_str());
   }

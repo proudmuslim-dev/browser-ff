@@ -277,7 +277,11 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
 #ifdef ENABLE_WASM_SIMD
       .setWasmSimd(GetWorkerPref<bool>("wasm_simd"_ns))
 #endif
-#ifdef ENABLE_WASM_REFTYPES
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+      .setWasmFunctionReferences(
+          GetWorkerPref<bool>("wasm_function_references"_ns))
+#endif
+#ifdef ENABLE_WASM_GC
       .setWasmGc(GetWorkerPref<bool>("wasm_gc"_ns))
 #endif
       .setWasmVerbose(GetWorkerPref<bool>("wasm_verbose"_ns))
@@ -2127,8 +2131,8 @@ bool LogViolationDetailsRunnable::MainThreadRun() {
       csp->LogViolationDetails(nsIContentSecurityPolicy::VIOLATION_TYPE_EVAL,
                                nullptr,  // triggering element
                                mWorkerPrivate->CSPEventListener(), mFileName,
-                               mScriptSample, mLineNum, mColumnNum,
-                               EmptyString(), EmptyString());
+                               mScriptSample, mLineNum, mColumnNum, u""_ns,
+                               u""_ns);
     }
   }
 

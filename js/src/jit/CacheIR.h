@@ -212,15 +212,24 @@ enum class CacheOp {
 #undef DEFINE_OP
 };
 
+// CacheIR opcode info that's read in performance-sensitive code. Stored as a
+// single byte per op for better cache locality.
+struct CacheIROpInfo {
+  uint8_t argLength : 7;
+  bool transpile : 1;
+};
+static_assert(sizeof(CacheIROpInfo) == 1);
+extern const CacheIROpInfo CacheIROpInfos[];
+
 extern const char* const CacheIROpNames[];
-extern const uint32_t CacheIROpArgLengths[];
 extern const uint32_t CacheIROpHealth[];
 
 class StubField {
  public:
   enum class Type : uint8_t {
     // These fields take up a single word.
-    RawWord,
+    RawInt32,
+    RawPointer,
     Shape,
     ObjectGroup,
     JSObject,
@@ -232,7 +241,6 @@ class StubField {
     // These fields take up 64 bits on all platforms.
     RawInt64,
     First64BitType = RawInt64,
-    DOMExpandoGeneration,
     Value,
 
     Limit
@@ -545,7 +553,7 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
   void assertLengthMatches() {
 #ifdef DEBUG
     // After writing arguments, assert the length matches CacheIROpArgLengths.
-    size_t expectedLen = CacheIROpArgLengths[size_t(*currentOp_)];
+    size_t expectedLen = CacheIROpInfos[size_t(*currentOp_)].argLength;
     MOZ_ASSERT_IF(!failed(),
                   buffer_.length() - currentOpArgsStart_ == expectedLen);
     currentOp_.reset();
@@ -613,11 +621,11 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     MOZ_ASSERT(script);
     addStubField(uintptr_t(script), StubField::Type::BaseScript);
   }
-  void writeRawWordField(uintptr_t word) {
-    addStubField(word, StubField::Type::RawWord);
+  void writeRawInt32Field(uint32_t val) {
+    addStubField(val, StubField::Type::RawInt32);
   }
   void writeRawPointerField(const void* ptr) {
-    addStubField(uintptr_t(ptr), StubField::Type::RawWord);
+    addStubField(uintptr_t(ptr), StubField::Type::RawPointer);
   }
   void writeIdField(jsid id) {
     addStubField(uintptr_t(JSID_BITS(id)), StubField::Type::Id);
@@ -625,8 +633,8 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
   void writeValueField(const Value& val) {
     addStubField(val.asRawBits(), StubField::Type::Value);
   }
-  void writeDOMExpandoGenerationField(uint64_t generation) {
-    addStubField(generation, StubField::Type::DOMExpandoGeneration);
+  void writeRawInt64Field(uint64_t val) {
+    addStubField(val, StubField::Type::RawInt64);
   }
 
   void writeJSOpImm(JSOp op) {
@@ -731,7 +739,7 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
 
   size_t stubDataSize() const { return stubDataSize_; }
   void copyStubData(uint8_t* dest) const;
-  bool stubDataEqualsMaybeUpdate(uint8_t* stubData, bool* updated) const;
+  bool stubDataEquals(const uint8_t* stubData) const;
 
   bool operandIsDead(uint32_t operandId, uint32_t currentInstruction) const {
     if (operandId >= operandLastUsed_.length()) {
@@ -930,6 +938,18 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
 #endif
   }
 
+  void callDOMFunction(ObjOperandId calleeId, Int32OperandId argc,
+                       ObjOperandId thisObjId, HandleFunction calleeFunc,
+                       CallFlags flags) {
+#ifdef JS_SIMULATOR
+    void* rawPtr = JS_FUNC_TO_DATA_PTR(void*, calleeFunc->native());
+    void* redirected = Simulator::RedirectNativeFunction(rawPtr, Args_General3);
+    callDOMFunction_(calleeId, argc, thisObjId, flags, redirected);
+#else
+    callDOMFunction_(calleeId, argc, thisObjId, flags);
+#endif
+  }
+
   void callAnyNativeFunction(ObjOperandId calleeId, Int32OperandId argc,
                              CallFlags flags) {
     MOZ_ASSERT(!flags.isSameRealm());
@@ -967,6 +987,16 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     MOZ_ASSERT(getter->hasJitEntry());
     uint32_t nargsAndFlags = encodeNargsAndFlags(getter);
     callScriptedGetterResult_(receiver, getter, sameRealm, nargsAndFlags);
+    trialInliningState_ = TrialInliningState::Candidate;
+  }
+
+  void callInlinedGetterResult(ValOperandId receiver, JSFunction* getter,
+                               ICScript* icScript, bool sameRealm) {
+    MOZ_ASSERT(getter->hasJitEntry());
+    uint32_t nargsAndFlags = encodeNargsAndFlags(getter);
+    callInlinedGetterResult_(receiver, getter, icScript, sameRealm,
+                             nargsAndFlags);
+    trialInliningState_ = TrialInliningState::Inlined;
   }
 
   void callNativeGetterResult(ValOperandId receiver, JSFunction* getter,
@@ -981,6 +1011,16 @@ class MOZ_RAII CacheIRWriter : public JS::CustomAutoRooter {
     MOZ_ASSERT(setter->hasJitEntry());
     uint32_t nargsAndFlags = encodeNargsAndFlags(setter);
     callScriptedSetter_(receiver, setter, rhs, sameRealm, nargsAndFlags);
+    trialInliningState_ = TrialInliningState::Candidate;
+  }
+
+  void callInlinedSetter(ObjOperandId receiver, JSFunction* setter,
+                         ValOperandId rhs, ICScript* icScript, bool sameRealm) {
+    MOZ_ASSERT(setter->hasJitEntry());
+    uint32_t nargsAndFlags = encodeNargsAndFlags(setter);
+    callInlinedSetter_(receiver, setter, rhs, icScript, sameRealm,
+                       nargsAndFlags);
+    trialInliningState_ = TrialInliningState::Inlined;
   }
 
   void callNativeSetter(ObjOperandId receiver, JSFunction* setter,
@@ -1179,11 +1219,11 @@ class MOZ_RAII CacheIRCloner {
   PropertyName* getPropertyNameField(uint32_t stubOffset);
   JS::Symbol* getSymbolField(uint32_t stubOffset);
   BaseScript* getBaseScriptField(uint32_t stubOffset);
-  uintptr_t getRawWordField(uint32_t stubOffset);
+  uint32_t getRawInt32Field(uint32_t stubOffset);
   const void* getRawPointerField(uint32_t stubOffset);
   jsid getIdField(uint32_t stubOffset);
   const Value getValueField(uint32_t stubOffset);
-  uint64_t getDOMExpandoGenerationField(uint32_t stubOffset);
+  uint64_t getRawInt64Field(uint32_t stubOffset);
 };
 
 class MOZ_RAII IRGenerator {
@@ -1291,6 +1331,9 @@ class MOZ_RAII GetPropIRGenerator : public IRGenerator {
                                                       ValOperandId receiverId);
   AttachDecision tryAttachFunction(HandleObject obj, ObjOperandId objId,
                                    HandleId id);
+  AttachDecision tryAttachArgumentsObjectIterator(HandleObject obj,
+                                                  ObjOperandId objId,
+                                                  HandleId id);
 
   AttachDecision tryAttachGenericProxy(HandleObject obj, ObjOperandId objId,
                                        HandleId id, bool handleDOMProxies);
@@ -1885,10 +1928,8 @@ class MOZ_RAII CompareIRGenerator : public IRGenerator {
   AttachDecision tryAttachBigInt(ValOperandId lhsId, ValOperandId rhsId);
   AttachDecision tryAttachNumberUndefined(ValOperandId lhsId,
                                           ValOperandId rhsId);
-  AttachDecision tryAttachPrimitiveUndefined(ValOperandId lhsId,
-                                             ValOperandId rhsId);
-  AttachDecision tryAttachObjectUndefined(ValOperandId lhsId,
-                                          ValOperandId rhsId);
+  AttachDecision tryAttachAnyNullUndefined(ValOperandId lhsId,
+                                           ValOperandId rhsId);
   AttachDecision tryAttachNullUndefined(ValOperandId lhsId, ValOperandId rhsId);
   AttachDecision tryAttachStringNumber(ValOperandId lhsId, ValOperandId rhsId);
   AttachDecision tryAttachPrimitiveSymbol(ValOperandId lhsId,
@@ -1948,6 +1989,7 @@ class MOZ_RAII UnaryArithIRGenerator : public IRGenerator {
 
   AttachDecision tryAttachInt32();
   AttachDecision tryAttachNumber();
+  AttachDecision tryAttachBitwise();
   AttachDecision tryAttachBigInt();
   AttachDecision tryAttachStringInt32();
   AttachDecision tryAttachStringNumber();

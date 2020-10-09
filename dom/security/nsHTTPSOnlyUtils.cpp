@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/NullPrincipal.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/net/DNS.h"
@@ -83,7 +84,7 @@ void nsHTTPSOnlyUtils::PotentiallyFireHttpRequestToShortenTimout(
 
   // if it's not a GET method, then there is nothing to do here either.
   nsAutoCString method;
-  Unused << httpChannel->GetRequestMethod(method);
+  mozilla::Unused << httpChannel->GetRequestMethod(method);
   if (!method.EqualsLiteral("GET")) {
     return;
   }
@@ -123,6 +124,15 @@ bool nsHTTPSOnlyUtils::ShouldUpgradeRequest(nsIURI* aURI,
                                          nsIScriptError::infoFlag, aLoadInfo,
                                          aURI);
     return false;
+  }
+
+  // All subresources of an exempt triggering principal are also exempt
+  if (aLoadInfo->GetExternalContentPolicyType() !=
+      nsIContentPolicy::TYPE_DOCUMENT) {
+    if (!aLoadInfo->TriggeringPrincipal()->IsSystemPrincipal() &&
+        TestIfPrincipalIsExempt(aLoadInfo->TriggeringPrincipal())) {
+      return false;
+    }
   }
 
   // We can upgrade the request - let's log it to the console
@@ -204,17 +214,9 @@ bool nsHTTPSOnlyUtils::CouldBeHttpsOnlyError(nsIChannel* aChannel,
     return false;
   }
 
-  // httpsOnlyStatus is reset to it's default value in the child-process after
-  // our forced timeout. Until we figure out why it's reset (bug 1661275) we
-  // have this workaround:
-  uint32_t httpsOnlyStatus = loadInfo->GetHttpsOnlyStatus();
-  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_UNINITIALIZED &&
-      !XRE_IsParentProcess() && aError == NS_ERROR_NET_TIMEOUT) {
-    return true;
-  }
-
   // If the load is exempt or did not get upgraded,
   // then there is nothing to do here.
+  uint32_t httpsOnlyStatus = loadInfo->GetHttpsOnlyStatus();
   if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_EXEMPT ||
       httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_UNINITIALIZED) {
     return false;
@@ -230,6 +232,24 @@ bool nsHTTPSOnlyUtils::CouldBeHttpsOnlyError(nsIChannel* aChannel,
            NS_ERROR_HARMFUL_URI == aError ||
            NS_ERROR_CONTENT_CRASHED == aError ||
            NS_ERROR_FRAME_CRASHED == aError);
+}
+
+/* static */
+bool nsHTTPSOnlyUtils::TestIfPrincipalIsExempt(nsIPrincipal* aPrincipal) {
+  static nsCOMPtr<nsIPermissionManager> sPermMgr;
+  if (!sPermMgr) {
+    sPermMgr = mozilla::services::GetPermissionManager();
+    mozilla::ClearOnShutdown(&sPermMgr);
+  }
+  NS_ENSURE_TRUE(sPermMgr, false);
+
+  uint32_t perm;
+  nsresult rv = sPermMgr->TestExactPermissionFromPrincipal(
+      aPrincipal, "https-only-load-insecure"_ns, &perm);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  return perm == nsIHttpsOnlyModePermission::LOAD_INSECURE_ALLOW ||
+         perm == nsIHttpsOnlyModePermission::LOAD_INSECURE_ALLOW_SESSION;
 }
 
 /* static */
@@ -261,23 +281,10 @@ void nsHTTPSOnlyUtils::TestSitePermissionAndPotentiallyAddExemption(
       aChannel, getter_AddRefs(principal));
   NS_ENSURE_SUCCESS_VOID(rv);
 
-  nsCOMPtr<nsIPermissionManager> permMgr =
-      mozilla::services::GetPermissionManager();
-  NS_ENSURE_TRUE_VOID(permMgr);
-
-  uint32_t perm;
-  rv = permMgr->TestExactPermissionFromPrincipal(
-      principal, "https-only-load-insecure"_ns, &perm);
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  bool isHttpsOnlyExempt =
-      perm == nsIHttpsOnlyModePermission::LOAD_INSECURE_ALLOW ||
-      perm == nsIHttpsOnlyModePermission::LOAD_INSECURE_ALLOW_SESSION;
-
   // We explicitly add or also remove the exemption flag, because this
   // function is also consulted after redirects.
   uint32_t httpsOnlyStatus = loadInfo->GetHttpsOnlyStatus();
-  if (isHttpsOnlyExempt) {
+  if (TestIfPrincipalIsExempt(principal)) {
     httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_EXEMPT;
   } else {
     httpsOnlyStatus &= ~nsILoadInfo::HTTPS_ONLY_EXEMPT;
@@ -428,7 +435,7 @@ TestHTTPAnswerRunnable::OnStartRequest(nsIRequest* aRequest) {
       nsresult httpsOnlyChannelStatus;
       httpsOnlyChannel->GetStatus(&httpsOnlyChannelStatus);
       if (httpsOnlyChannelStatus == NS_OK) {
-        mDocumentLoadListener->Cancel(NS_ERROR_NET_TIMEOUT);
+        httpsOnlyChannel->Cancel(NS_ERROR_NET_TIMEOUT);
       }
     }
   }
@@ -488,7 +495,7 @@ TestHTTPAnswerRunnable::Notify(nsITimer* aTimer) {
     return NS_OK;
   }
 
-  OriginAttributes attrs = origLoadInfo->GetOriginAttributes();
+  mozilla::OriginAttributes attrs = origLoadInfo->GetOriginAttributes();
   RefPtr<nsIPrincipal> nullPrincipal =
       mozilla::NullPrincipal::CreateWithInheritedAttributes(attrs);
 

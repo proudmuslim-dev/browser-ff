@@ -21,7 +21,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   accessibility: "chrome://marionette/content/accessibility.js",
   action: "chrome://marionette/content/action.js",
   atom: "chrome://marionette/content/atom.js",
-  Capabilities: "chrome://marionette/content/capabilities.js",
   ContentEventObserverService: "chrome://marionette/content/dom.js",
   element: "chrome://marionette/content/element.js",
   error: "chrome://marionette/content/error.js",
@@ -30,8 +29,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   interaction: "chrome://marionette/content/interaction.js",
   legacyaction: "chrome://marionette/content/legacyaction.js",
   Log: "chrome://marionette/content/log.js",
-  navigate: "chrome://marionette/content/navigate.js",
-  PageLoadStrategy: "chrome://marionette/content/capabilities.js",
   pprint: "chrome://marionette/content/format.js",
   proxy: "chrome://marionette/content/proxy.js",
   sandbox: "chrome://marionette/content/evaluate.js",
@@ -49,7 +46,6 @@ const contentId = content.docShell.browsingContext.id;
 const curContainer = {
   _frame: null,
   _parentFrame: null,
-  shadowRoot: null,
 
   get frame() {
     return this._frame;
@@ -59,7 +55,6 @@ const curContainer = {
     this._frame = frame;
     this._parentFrame = frame.parent;
     this.id = frame.browsingContext.id;
-    this.shadowRoot = null;
   },
 
   get parentFrame() {
@@ -74,14 +69,6 @@ addEventListener("dblclick", event.DoubleClickTracker.resetClick);
 addEventListener("unload", event.DoubleClickTracker.resetClick, true);
 
 const seenEls = new element.Store();
-
-Object.defineProperty(this, "capabilities", {
-  get() {
-    let payload = sendSyncMessage("Marionette:WebDriver:GetCapabilities");
-    return Capabilities.fromJSON(payload[0]);
-  },
-  configurable: true,
-});
 
 let legacyactions = new legacyaction.Chain();
 
@@ -149,16 +136,15 @@ let isElementSelectedFn = dispatch(isElementSelected);
 let clearElementFn = dispatch(clearElement);
 let isElementDisplayedFn = dispatch(isElementDisplayed);
 let getElementValueOfCssPropertyFn = dispatch(getElementValueOfCssProperty);
-let switchToShadowRootFn = dispatch(switchToShadowRoot);
 let singleTapFn = dispatch(singleTap);
 let performActionsFn = dispatch(performActions);
 let releaseActionsFn = dispatch(releaseActions);
 let actionChainFn = dispatch(actionChain);
 let multiActionFn = dispatch(multiAction);
-let executeFn = dispatch(execute);
-let executeInSandboxFn = dispatch(executeInSandbox);
+let executeScriptFn = dispatch(executeScript);
 let sendKeysToElementFn = dispatch(sendKeysToElement);
 let reftestWaitFn = dispatch(reftestWait);
+let setBrowsingContextIdFn = dispatch(setBrowsingContextId);
 
 function startListeners() {
   eventDispatcher.enable();
@@ -172,8 +158,7 @@ function startListeners() {
     "Marionette:DOM:RemoveEventListener",
     domRemoveEventListener
   );
-  addMessageListener("Marionette:execute", executeFn);
-  addMessageListener("Marionette:executeInSandbox", executeInSandboxFn);
+  addMessageListener("Marionette:executeScript", executeScriptFn);
   addMessageListener("Marionette:findElementContent", findElementContentFn);
   addMessageListener("Marionette:findElementsContent", findElementsContentFn);
   addMessageListener("Marionette:getActiveElement", getActiveElementFn);
@@ -199,10 +184,10 @@ function startListeners() {
   addMessageListener("Marionette:releaseActions", releaseActionsFn);
   addMessageListener("Marionette:sendKeysToElement", sendKeysToElementFn);
   addMessageListener("Marionette:Session:Delete", deleteSession);
+  addMessageListener("Marionette:setBrowsingContextId", setBrowsingContextIdFn);
   addMessageListener("Marionette:singleTap", singleTapFn);
   addMessageListener("Marionette:switchToFrame", switchToFrame);
   addMessageListener("Marionette:switchToParentFrame", switchToParentFrame);
-  addMessageListener("Marionette:switchToShadowRoot", switchToShadowRootFn);
 }
 
 function deregister() {
@@ -212,8 +197,7 @@ function deregister() {
   removeMessageListener("Marionette:clearElement", clearElementFn);
   removeMessageListener("Marionette:clickElement", clickElementFn);
   removeMessageListener("Marionette:Deregister", deregister);
-  removeMessageListener("Marionette:execute", executeFn);
-  removeMessageListener("Marionette:executeInSandbox", executeInSandboxFn);
+  removeMessageListener("Marionette:executeScript", executeScriptFn);
   removeMessageListener("Marionette:findElementContent", findElementContentFn);
   removeMessageListener(
     "Marionette:findElementsContent",
@@ -247,10 +231,13 @@ function deregister() {
   removeMessageListener("Marionette:releaseActions", releaseActionsFn);
   removeMessageListener("Marionette:sendKeysToElement", sendKeysToElementFn);
   removeMessageListener("Marionette:Session:Delete", deleteSession);
+  removeMessageListener(
+    "Marionette:setBrowsingContextId",
+    setBrowsingContextIdFn
+  );
   removeMessageListener("Marionette:singleTap", singleTapFn);
   removeMessageListener("Marionette:switchToFrame", switchToFrame);
   removeMessageListener("Marionette:switchToParentFrame", switchToParentFrame);
-  removeMessageListener("Marionette:switchToShadowRoot", switchToShadowRootFn);
 }
 
 function deleteSession() {
@@ -320,13 +307,15 @@ function sendError(err, uuid) {
   sendToServer(uuid, err);
 }
 
-async function execute(script, args, opts) {
-  let sb = sandbox.createMutable(curContainer.frame);
-  return evaluate.sandbox(sb, script, args, opts);
-}
+async function executeScript(script, args, opts = {}) {
+  let sb;
 
-async function executeInSandbox(script, args, opts) {
-  let sb = sandboxes.get(opts.sandboxName, opts.newSandbox);
+  if (opts.useSandbox) {
+    sb = sandboxes.get(opts.sandboxName, opts.newSandbox);
+  } else {
+    sb = sandbox.createMutable(curContainer.frame);
+  }
+
   return evaluate.sandbox(sb, script, args, opts);
 }
 
@@ -376,7 +365,7 @@ function emitTouchEvent(type, touch) {
 /**
  * Function that perform a single tap
  */
-async function singleTap(el, corx, cory) {
+async function singleTap(el, corx, cory, capabilities) {
   // after this block, the element will be scrolled into view
   let visible = element.isVisible(el, corx, cory);
   if (!visible) {
@@ -385,7 +374,7 @@ async function singleTap(el, corx, cory) {
     );
   }
 
-  let a11y = accessibility.get(capabilities.get("moz:accessibilityChecks"));
+  let a11y = accessibility.get(capabilities["moz:accessibilityChecks"]);
   let acc = await a11y.getAccessible(el, true);
   a11y.assertVisible(acc, el, visible);
   a11y.assertActionable(acc, el);
@@ -434,16 +423,18 @@ function createATouch(el, corx, cory, touchId) {
 /**
  * Perform a series of grouped actions at the specified points in time.
  *
- * @param {obj} msg
- *      Object with an |actions| attribute that is an Array of objects
- *      each of which represents an action sequence.
+ * @param {Object} msg
+ *     Object with an |actions| attribute that is an Array of objects
+ *     each of which represents an action sequence.
+ * @param {Object} capabilities
+ *     Object with a list of WebDriver session capabilities.
  */
-async function performActions(msg) {
+async function performActions(msg, capabilities) {
   let chain = action.Chain.fromJSON(msg.actions);
   await action.dispatch(
     chain,
     curContainer.frame,
-    !capabilities.get("moz:useNonSpecCompliantPointerOrigin")
+    !capabilities["moz:useNonSpecCompliantPointerOrigin"]
   );
 }
 
@@ -734,6 +725,17 @@ function getBrowsingContextId(topContext = false) {
 }
 
 /**
+ * Set the current browsing context.
+ *
+ * @param {number} browsingContextId
+ *     Id of the current BrowsingContext.
+ */
+function setBrowsingContextId(browsingContextId) {
+  const bc = BrowsingContext.get(browsingContextId);
+  curContainer.frame = bc.window;
+}
+
+/**
  * Return the current visible URL.
  *
  * @return {string}
@@ -748,12 +750,14 @@ function getCurrentUrl() {
  *
  * @param {WebElement} el
  *     Element to click.
+ * @param {Object} capabilities
+ *     Object with a list of WebDriver session capabilities.
  */
-function clickElement(el) {
+function clickElement(el, capabilities) {
   return interaction.clickElement(
     el,
-    capabilities.get("moz:accessibilityChecks"),
-    capabilities.get("moz:webdriverClick")
+    capabilities["moz:accessibilityChecks"],
+    capabilities["moz:webdriverClick"]
   );
 }
 
@@ -798,10 +802,10 @@ function getElementTagName(el) {
  * Also performs additional accessibility checks if enabled by session
  * capability.
  */
-function isElementDisplayed(el) {
+function isElementDisplayed(el, capabilities) {
   return interaction.isElementDisplayed(
     el,
-    capabilities.get("moz:accessibilityChecks")
+    capabilities["moz:accessibilityChecks"]
   );
 }
 
@@ -830,10 +834,10 @@ function getElementRect(el) {
   };
 }
 
-function isElementEnabled(el) {
+function isElementEnabled(el, capabilities) {
   return interaction.isElementEnabled(
     el,
-    capabilities.get("moz:accessibilityChecks")
+    capabilities["moz:accessibilityChecks"]
   );
 }
 
@@ -843,18 +847,18 @@ function isElementEnabled(el) {
  * This operation only makes sense on input elements of the Checkbox-
  * and Radio Button states, or option elements.
  */
-function isElementSelected(el) {
+function isElementSelected(el, capabilities) {
   return interaction.isElementSelected(
     el,
-    capabilities.get("moz:accessibilityChecks")
+    capabilities["moz:accessibilityChecks"]
   );
 }
 
-async function sendKeysToElement(el, val) {
+async function sendKeysToElement(el, val, capabilities) {
   let opts = {
-    strictFileInteractability: capabilities.get("strictFileInteractability"),
-    accessibilityChecks: capabilities.get("moz:accessibilityChecks"),
-    webdriverClick: capabilities.get("moz:webdriverClick"),
+    strictFileInteractability: capabilities.strictFileInteractability,
+    accessibilityChecks: capabilities["moz:accessibilityChecks"],
+    webdriverClick: capabilities["moz:webdriverClick"],
   };
   await interaction.sendKeysToElement(el, val, opts);
 }
@@ -862,38 +866,6 @@ async function sendKeysToElement(el, val) {
 /** Clear the text of an element. */
 function clearElement(el) {
   interaction.clearElement(el);
-}
-
-/** Switch the current context to the specified host's Shadow DOM. */
-function switchToShadowRoot(el) {
-  if (!element.isElement(el)) {
-    // If no host element is passed, attempt to find a parent shadow
-    // root or, if none found, unset the current shadow root
-    if (curContainer.shadowRoot) {
-      let parent;
-      try {
-        parent = curContainer.shadowRoot.host;
-      } catch (e) {
-        // There is a chance that host element is dead and we are trying to
-        // access a dead object.
-        curContainer.shadowRoot = null;
-        return;
-      }
-      while (parent && !(parent instanceof curContainer.frame.ShadowRoot)) {
-        parent = parent.parentNode;
-      }
-      curContainer.shadowRoot = parent;
-    }
-    return;
-  }
-
-  let foundShadowRoot = el.shadowRoot;
-  if (!foundShadowRoot) {
-    throw new error.NoSuchElementError(
-      pprint`Unable to locate shadow root: ${el}`
-    );
-  }
-  curContainer.shadowRoot = foundShadowRoot;
 }
 
 /**

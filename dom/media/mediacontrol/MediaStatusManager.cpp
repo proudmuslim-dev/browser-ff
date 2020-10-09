@@ -198,9 +198,8 @@ MediaMetadataBase MediaStatusManager::CreateDefaultMetadata() const {
 }
 
 nsString MediaStatusManager::GetDefaultTitle() const {
-  // TODO : maybe need l10n? (bug1657701)
-  nsString defaultTitle;
-  defaultTitle.AssignLiteral("Firefox is playing media");
+  RefPtr<MediaControlService> service = MediaControlService::GetService();
+  nsString defaultTitle = service->GetFallbackTitle();
 
   RefPtr<CanonicalBrowsingContext> bc =
       CanonicalBrowsingContext::Get(mTopLevelBrowsingContextId);
@@ -239,18 +238,18 @@ nsString MediaStatusManager::GetDefaultFaviconURL() const {
   // to show the icon on virtual controller interface.
   nsCOMPtr<nsIChromeRegistry> regService = services::GetChromeRegistry();
   if (!regService) {
-    return EmptyString();
+    return u""_ns;
   }
   nsCOMPtr<nsIURI> processedURI;
   regService->ConvertChromeURL(faviconURI, getter_AddRefs(processedURI));
 
   nsAutoCString spec;
   if (NS_FAILED(processedURI->GetSpec(spec))) {
-    return EmptyString();
+    return u""_ns;
   }
   return NS_ConvertUTF8toUTF16(spec);
 #endif
-  return EmptyString();
+  return u""_ns;
 }
 
 void MediaStatusManager::SetDeclaredPlaybackState(

@@ -51,7 +51,9 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
+#include "mozilla/ToString.h"
 #include "mozilla/Unused.h"
+#include "mozilla/dom/AutoPrintEventDispatcher.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 #include "mozilla/dom/DataTransfer.h"
 #include "mozilla/dom/DocGroup.h"
@@ -133,6 +135,7 @@
 #include "nsViewportInfo.h"
 #include "nsWebBrowser.h"
 #include "nsWindowWatcher.h"
+#include "nsIXULRuntime.h"
 
 #ifdef XP_WIN
 #  include "mozilla/plugins/PluginWidgetChild.h"
@@ -1012,6 +1015,52 @@ mozilla::ipc::IPCResult BrowserChild::RecvResumeLoad(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult BrowserChild::RecvCloneDocumentTreeIntoSelf(
+    const MaybeDiscarded<BrowsingContext>& aSourceBC) {
+  if (NS_WARN_IF(aSourceBC.IsNullOrDiscarded())) {
+    return IPC_OK();
+  }
+  nsCOMPtr<Document> sourceDocument = aSourceBC.get()->GetDocument();
+  if (NS_WARN_IF(!sourceDocument)) {
+    return IPC_OK();
+  }
+
+  nsCOMPtr<nsIDocShell> ourDocShell = do_GetInterface(WebNavigation());
+  if (NS_WARN_IF(!ourDocShell)) {
+    return IPC_OK();
+  }
+
+  nsCOMPtr<nsIContentViewer> cv;
+  ourDocShell->GetContentViewer(getter_AddRefs(cv));
+  if (NS_WARN_IF(!cv)) {
+    return IPC_OK();
+  }
+
+  RefPtr<Document> clone;
+  {
+    AutoPrintEventDispatcher dispatcher(*sourceDocument);
+    nsAutoScriptBlocker scriptBlocker;
+    bool hasInProcessCallbacks = false;
+    clone = sourceDocument->CreateStaticClone(ourDocShell, cv,
+                                              &hasInProcessCallbacks);
+    if (NS_WARN_IF(!clone)) {
+      return IPC_OK();
+    }
+  }
+
+  // Since the clone document is not parsed-created, we need to initialize
+  // layout manually. This is usually done in ReflowPrintObject for non-remote
+  // documents.
+  if (RefPtr<PresShell> ps = clone->GetPresShell()) {
+    if (!ps->DidInitialize()) {
+      nsresult rv = ps->Initialize();
+      Unused << NS_WARN_IF(NS_FAILED(rv));
+    }
+  }
+
+  return IPC_OK();
+}
+
 void BrowserChild::DoFakeShow(const ParentShowInfo& aParentShowInfo) {
   OwnerShowInfo ownerInfo{ScreenIntSize(), ScrollbarPreference::Auto,
                           mParentIsActive, nsSizeMode_Normal};
@@ -1239,7 +1288,7 @@ void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
                                    const ScrollableLayerGuid& aGuid) {
   MOZ_LOG(
       sApzChildLog, LogLevel::Debug,
-      ("Handling double tap at %s with %p %p\n", Stringify(aPoint).c_str(),
+      ("Handling double tap at %s with %p %p\n", ToString(aPoint).c_str(),
        mBrowserChildMessageManager ? mBrowserChildMessageManager->GetWrapper()
                                    : nullptr,
        mBrowserChildMessageManager.get()));
@@ -3325,16 +3374,14 @@ ScreenIntSize BrowserChild::GetInnerSize() {
       innerSize, PixelCastJustification::LayoutDeviceIsScreenForTabDims);
 };
 
-Maybe<LayoutDeviceIntRect> BrowserChild::GetVisibleRect() const {
+Maybe<nsRect> BrowserChild::GetVisibleRect() const {
   if (mIsTopLevel) {
     // We are conservative about visible rects for top-level browsers to avoid
     // artifacts when resizing
     return Nothing();
   }
-  CSSRect visibleRectCSS = CSSPixel::FromAppUnits(mEffectsInfo.mVisibleRect);
-  LayoutDeviceIntRect visibleRectLD =
-      RoundedToInt(visibleRectCSS * mPuppetWidget->GetDefaultScale());
-  return Some(visibleRectLD);
+
+  return Some(mEffectsInfo.mVisibleRect);
 }
 
 Maybe<LayoutDeviceRect>
@@ -3403,7 +3450,7 @@ nsresult BrowserChild::CanCancelContentJS(
 
   // If we have session history in the parent we've already performed
   // the checks following, so we can return early.
-  if (StaticPrefs::fission_sessionHistoryInParent()) {
+  if (mozilla::SessionHistoryInParent()) {
     *aCanCancel = true;
     return NS_OK;
   }
@@ -3668,9 +3715,8 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
     if (CrashReporter::GetEnabled()) {
       nsCOMPtr<nsIURI> annotationURI;
 
-      nsresult rv = NS_MutateURI(aLocation)
-                        .SetUserPass(EmptyCString())
-                        .Finalize(annotationURI);
+      nsresult rv =
+          NS_MutateURI(aLocation).SetUserPass(""_ns).Finalize(annotationURI);
 
       if (NS_FAILED(rv)) {
         // Ignore failures on about: URIs.

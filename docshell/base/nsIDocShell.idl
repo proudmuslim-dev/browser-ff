@@ -477,12 +477,6 @@ interface nsIDocShell : nsIDocShellTreeItem
   attribute boolean isOffScreenBrowser;
 
   /**
-   * Allows nsDocumentViewer to tell the top-level same-type docshell that
-   * one of the documents under it is printing.
-   */
-  [noscript, notxpcom] void setIsPrinting(in boolean aIsPrinting);
-
-  /**
    * Propagated to the print preview document viewer.  Must only be called on
    * a document viewer that has been initialized for print preview.
    */
@@ -512,12 +506,12 @@ interface nsIDocShell : nsIDocShellTreeItem
   /**
    * The ID of the docshell in the session history.
    */
-  readonly attribute nsIDPtr historyID;
+  readonly attribute nsIDRef historyID;
 
   /**
    * Helper method for accessing this value from C++
    */
-  [noscript, notxpcom] nsID HistoryID();
+  [noscript, notxpcom] nsIDRef HistoryID();
 
   /**
    * Sets whether a docshell is an app tab. An app tab docshell may behave
@@ -702,11 +696,6 @@ interface nsIDocShell : nsIDocShellTreeItem
    *                                  creating the editor.
    */
   void makeEditable(in boolean inWaitForUriLoad);
-
-  /**
-   * Set when an iframe/frame is added dynamically.
-   */
-  [infallible] attribute boolean createdDynamically;
 
   /**
    * Returns false for mLSHE, true for mOSHE

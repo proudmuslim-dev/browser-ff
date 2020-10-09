@@ -29,6 +29,7 @@
 #include "gc/FreeOp.h"
 #include "jit/AtomicOperations.h"
 #include "jit/JitOptions.h"
+#include "jit/JitRuntime.h"
 #include "jit/Simulator.h"
 #include "js/Printf.h"
 #include "js/PropertySpec.h"  // JS_{PS,FN}{,_END}
@@ -127,11 +128,26 @@ static inline bool WasmReftypesFlag(JSContext* cx) {
 #endif
 }
 
+static inline bool WasmFunctionReferencesFlag(JSContext* cx) {
+  if (IsFuzzingIon(cx) || IsFuzzingCranelift(cx)) {
+    return false;
+  }
+#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+  return WasmReftypesFlag(cx) && cx->options().wasmFunctionReferences();
+#else
+  return false;
+#endif
+}
+
 static inline bool WasmGcFlag(JSContext* cx) {
   if (IsFuzzingIon(cx) || IsFuzzingCranelift(cx)) {
     return false;
   }
-  return cx->options().wasmGc();
+#ifdef ENABLE_WASM_GC
+  return WasmFunctionReferencesFlag(cx) && cx->options().wasmGc();
+#else
+  return false;
+#endif
 }
 
 static inline bool WasmThreadsFlag(JSContext* cx) {
@@ -223,9 +239,8 @@ static inline bool WasmDebuggerActive(JSContext* cx) {
  * For example, --wasm-gc selects the GC feature, and if Baseline is available
  * then the feature is available.
  *
- * In a shell build, there are per-feature testing functions (usually of the
- * form wasmFeatureEnabled, wasmFeatureSupport, or wasmFeatureSupported) to
- * probe whether specific features are available.
+ * In a shell build, there are per-feature testing functions (of the form
+ * wasmFeatureEnabled) to probe whether specific features are available.
  */
 
 // Compiler availability predicates.  These must be kept in sync with the
@@ -273,17 +288,21 @@ bool wasm::IonDisabledByFeatures(JSContext* cx, bool* isDisabled,
                                  JSStringBuilder* reason) {
   // Ion has no debugging support, no gc support.
   bool debug = WasmDebuggerActive(cx);
+  bool functionReferences = WasmFunctionReferencesFlag(cx);
   bool gc = WasmGcFlag(cx);
   if (reason) {
     char sep = 0;
     if (debug && !Append(reason, "debug", &sep)) {
       return false;
     }
+    if (functionReferences && !Append(reason, "function-references", &sep)) {
+      return false;
+    }
     if (gc && !Append(reason, "gc", &sep)) {
       return false;
     }
   }
-  *isDisabled = debug || gc;
+  *isDisabled = debug || functionReferences || gc;
   return true;
 }
 
@@ -300,11 +319,15 @@ bool wasm::CraneliftDisabledByFeatures(JSContext* cx, bool* isDisabled,
                                        JSStringBuilder* reason) {
   // Cranelift has no debugging support, no gc support, no simd.
   bool debug = WasmDebuggerActive(cx);
+  bool functionReferences = WasmFunctionReferencesFlag(cx);
   bool gc = WasmGcFlag(cx);
   bool simd = WasmSimdFlag(cx);
   if (reason) {
     char sep = 0;
     if (debug && !Append(reason, "debug", &sep)) {
+      return false;
+    }
+    if (functionReferences && !Append(reason, "function-references", &sep)) {
       return false;
     }
     if (gc && !Append(reason, "gc", &sep)) {
@@ -314,7 +337,7 @@ bool wasm::CraneliftDisabledByFeatures(JSContext* cx, bool* isDisabled,
       return false;
     }
   }
-  *isDisabled = debug || gc || simd;
+  *isDisabled = debug || functionReferences || gc || simd;
   return true;
 }
 
@@ -336,6 +359,11 @@ bool wasm::ReftypesAvailable(JSContext* cx) {
   return WasmReftypesFlag(cx) && AnyCompilerAvailable(cx);
 }
 
+bool wasm::FunctionReferencesAvailable(JSContext* cx) {
+  // Cranelift and Ion do not support function-references.
+  return WasmFunctionReferencesFlag(cx) && BaselineAvailable(cx);
+}
+
 bool wasm::GcTypesAvailable(JSContext* cx) {
   // Cranelift and Ion do not support GC.
   return WasmGcFlag(cx) && BaselineAvailable(cx);
@@ -351,8 +379,7 @@ bool wasm::SimdAvailable(JSContext* cx) {
 }
 
 bool wasm::ThreadsAvailable(JSContext* cx) {
-  return WasmThreadsFlag(cx) &&
-         (BaselineAvailable(cx) || IonAvailable(cx) || CraneliftAvailable(cx));
+  return WasmThreadsFlag(cx) && AnyCompilerAvailable(cx);
 }
 
 bool wasm::HasPlatformSupport(JSContext* cx) {
@@ -826,7 +853,7 @@ bool wasm::CompileAndSerialize(const ShareableBytes& bytecode,
 
   // The caller must ensure that huge memory support is configured the same in
   // the receiving process of this serialized module.
-  compileArgs->hugeMemory = wasm::IsHugeMemoryEnabled();
+  compileArgs->features.hugeMemory = wasm::IsHugeMemoryEnabled();
 
   SerializeListener listener(serialized);
 
@@ -912,7 +939,8 @@ static bool GetLimits(JSContext* cx, HandleObject obj, uint32_t maximumField,
   }
 
   uint32_t initial = 0;
-  if (!EnforceRangeU32(cx, initialVal, kind, "initial size", &initial)) {
+  if (!initialVal.isUndefined() &&
+      !EnforceRangeU32(cx, initialVal, kind, "initial size", &initial)) {
     return false;
   }
   limits->initial = initial;
@@ -923,6 +951,30 @@ static bool GetLimits(JSContext* cx, HandleObject obj, uint32_t maximumField,
     return false;
   }
 
+#ifdef ENABLE_WASM_TYPE_REFLECTIONS
+  // Get minimum parameter.
+  JSAtom* minimumAtom = Atomize(cx, "minimum", strlen("minimum"));
+  if (!minimumAtom) {
+    return false;
+  }
+  RootedId minimumId(cx, AtomToId(minimumAtom));
+
+  RootedValue minimumVal(cx);
+  if (!GetProperty(cx, obj, obj, minimumId, &minimumVal)) {
+    return false;
+  }
+
+  uint32_t minimum = 0;
+  if (!minimumVal.isUndefined() &&
+      !EnforceRangeU32(cx, minimumVal, kind, "initial size", &minimum)) {
+    return false;
+  }
+  if (!minimumVal.isUndefined()) {
+    limits->initial = minimum;
+  }
+#endif
+
+  // Get maximum parameter.
   JSAtom* maximumAtom = Atomize(cx, "maximum", strlen("maximum"));
   if (!maximumAtom) {
     return false;
@@ -985,6 +1037,21 @@ static bool GetLimits(JSContext* cx, HandleObject obj, uint32_t maximumField,
       }
     }
   }
+
+#ifdef ENABLE_WASM_TYPE_REFLECTIONS
+  // Check both minimum and initial are not supplied.
+  if (minimumVal.isUndefined() == initialVal.isUndefined()) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_SUPPLY_ONLY_ONE, "minimum", "initial");
+    return false;
+  }
+#else
+  if (initialVal.isUndefined()) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_MISSING_REQUIRED, "initial");
+    return false;
+  }
+#endif
 
   return true;
 }
@@ -1907,7 +1974,7 @@ bool WasmInstanceObject::getExportedFunction(
     if (funcExport.canHaveJitEntry()) {
       if (!funcExport.hasEagerStubs()) {
         void* interpStub = cx->runtime()->jitRuntime()->interpreterStub().value;
-        instance.code().setJitEntry(funcIndex, interpStub);
+        instance.code().setJitEntryIfNull(funcIndex, interpStub);
       }
       fun->setWasmJitEntry(instance.code().getAddressOfJitEntry(funcIndex));
     } else {
@@ -2944,7 +3011,7 @@ WasmGlobalObject* WasmGlobalObject::create(JSContext* cx, HandleVal hval,
             // TODO/AnyRef-boxing: With boxed immediates and strings, the write
             // barrier is going to have to be more complicated.
             ASSERT_ANYREF_IS_JSOBJECT;
-            JSObject::writeBarrierPost(cell->ref.asJSObjectAddress(), nullptr,
+            JSObject::postWriteBarrier(cell->ref.asJSObjectAddress(), nullptr,
                                        cell->ref.asJSObject());
           }
           break;
@@ -3230,10 +3297,10 @@ void WasmGlobalObject::setVal(JSContext* cx, wasm::HandleVal hval) {
           // TODO/AnyRef-boxing: With boxed immediates and strings, the write
           // barrier is going to have to be more complicated.
           ASSERT_ANYREF_IS_JSOBJECT;
-          JSObject::writeBarrierPre(prevPtr.asJSObject());
+          gc::PreWriteBarrier(prevPtr.asJSObject());
           cell->ref = val.ref();
           if (!cell->ref.isNull()) {
-            JSObject::writeBarrierPost(cell->ref.asJSObjectAddress(),
+            JSObject::postWriteBarrier(cell->ref.asJSObjectAddress(),
                                        prevPtr.asJSObject(),
                                        cell->ref.asJSObject());
           }

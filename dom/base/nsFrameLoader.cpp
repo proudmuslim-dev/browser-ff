@@ -50,8 +50,8 @@
 #include "ReferrerInfo.h"
 #include "nsIOpenWindowInfo.h"
 #include "nsISHistory.h"
-
 #include "nsIURI.h"
+#include "nsIXULRuntime.h"
 #include "nsNetUtil.h"
 
 #include "nsGkAtoms.h"
@@ -273,7 +273,7 @@ static bool IsTopContent(BrowsingContext* aParent, Element* aOwner) {
 
 static already_AddRefed<BrowsingContext> CreateBrowsingContext(
     Element* aOwner, nsIOpenWindowInfo* aOpenWindowInfo,
-    BrowsingContextGroup* aSpecificGroup) {
+    BrowsingContextGroup* aSpecificGroup, bool aNetworkCreated = false) {
   MOZ_ASSERT(!aOpenWindowInfo || !aSpecificGroup,
              "Only one of SpecificGroup and OpenWindowInfo may be provided!");
 
@@ -326,7 +326,8 @@ static already_AddRefed<BrowsingContext> CreateBrowsingContext(
   MOZ_ASSERT(!aSpecificGroup,
              "Can't force BrowsingContextGroup for non-toplevel context");
   return BrowsingContext::CreateDetached(parentInner, nullptr, nullptr,
-                                         frameName, parentBC->GetType());
+                                         frameName, parentBC->GetType(),
+                                         !aNetworkCreated);
 }
 
 static bool InitialLoadIsRemote(Element* aOwner) {
@@ -370,8 +371,10 @@ static already_AddRefed<BrowsingContextGroup> InitialBrowsingContextGroup(
   // will only ever use 53 bits of precision, so it can be round-tripped through
   // a JS number.
   nsresult rv = NS_OK;
-  int64_t signedGroupId{attrString.ToInteger(&rv, 10)};
+  int64_t signedGroupId = attrString.ToInteger64(&rv, 10);
   if (NS_FAILED(rv) || signedGroupId <= 0) {
+    MOZ_DIAGNOSTIC_ASSERT(
+        false, "we intended to have a particular id, but failed to parse it!");
     return nullptr;
   }
 
@@ -410,8 +413,16 @@ already_AddRefed<nsFrameLoader> nsFrameLoader::Create(
 
   RefPtr<BrowsingContextGroup> group = InitialBrowsingContextGroup(aOwner);
   RefPtr<BrowsingContext> context =
-      CreateBrowsingContext(aOwner, aOpenWindowInfo, group);
+      CreateBrowsingContext(aOwner, aOpenWindowInfo, group, aNetworkCreated);
   NS_ENSURE_TRUE(context, nullptr);
+
+  if (XRE_IsParentProcess() && aOpenWindowInfo) {
+    MOZ_ASSERT(context->IsTopContent());
+    if (RefPtr<BrowsingContext> crossGroupOpener =
+            aOpenWindowInfo->GetParent()) {
+      context->Canonical()->SetCrossGroupOpenerId(crossGroupOpener->Id());
+    }
+  }
 
   bool isRemoteFrame = InitialLoadIsRemote(aOwner);
   RefPtr<nsFrameLoader> fl =
@@ -1481,14 +1492,6 @@ nsresult nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  bool ourPaymentRequestAllowed =
-      ourContent->HasAttr(kNameSpaceID_None, nsGkAtoms::allowpaymentrequest);
-  bool otherPaymentRequestAllowed =
-      otherContent->HasAttr(kNameSpaceID_None, nsGkAtoms::allowpaymentrequest);
-  if (ourPaymentRequestAllowed != otherPaymentRequestAllowed) {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
   nsILoadContext* ourLoadContext = ourContent->OwnerDoc()->GetLoadContext();
   nsILoadContext* otherLoadContext = otherContent->OwnerDoc()->GetLoadContext();
   MOZ_ASSERT(ourLoadContext && otherLoadContext,
@@ -1872,7 +1875,7 @@ void nsFrameLoader::StartDestroy(bool aForProcessSwitch) {
       RefPtr<ChildSHistory> childSHistory =
           browsingContext->Top()->GetChildSessionHistory();
       if (childSHistory) {
-        if (StaticPrefs::fission_sessionHistoryInParent()) {
+        if (mozilla::SessionHistoryInParent()) {
           browsingContext->RemoveFromSessionHistory();
         } else {
           AutoTArray<nsID, 16> ids({browsingContext->GetHistoryID()});
@@ -2125,11 +2128,7 @@ nsresult nsFrameLoader::MaybeCreateDocShell() {
 
   InvokeBrowsingContextReadyCallback();
 
-  mIsTopLevelContent = mPendingBrowsingContext->IsContent() &&
-                       !mPendingBrowsingContext->GetParent();
-  if (!mNetworkCreated && !mIsTopLevelContent) {
-    docShell->SetCreatedDynamically(true);
-  }
+  mIsTopLevelContent = mPendingBrowsingContext->IsTopContent();
 
   if (mIsTopLevelContent) {
     // Manually add ourselves to our parent's docshell, as BrowsingContext won't
@@ -2754,6 +2753,23 @@ void nsFrameLoader::ActivateFrameEvent(const nsAString& aType, bool aCapture,
   }
 }
 
+nsresult nsFrameLoader::DoRemoteStaticClone(nsFrameLoader* aStaticCloneOf) {
+  MOZ_ASSERT(aStaticCloneOf->IsRemoteFrame());
+  MOZ_DIAGNOSTIC_ASSERT(GetBrowsingContext());
+  auto* cc = ContentChild::GetSingleton();
+  if (!cc) {
+    MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
+    // TODO: Could possibly be implemented without too much effort.
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  BrowsingContext* bcToClone = aStaticCloneOf->GetBrowsingContext();
+  if (NS_WARN_IF(!bcToClone)) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  cc->SendCloneDocumentTreeInto(bcToClone, GetBrowsingContext());
+  return NS_OK;
+}
+
 nsresult nsFrameLoader::FinishStaticClone(
     nsFrameLoader* aStaticCloneOf, bool* aOutHasInProcessPrintCallbacks) {
   MOZ_DIAGNOSTIC_ASSERT(
@@ -2772,16 +2788,16 @@ nsresult nsFrameLoader::FinishStaticClone(
     return NS_ERROR_UNEXPECTED;
   }
 
-  if (NS_WARN_IF(aStaticCloneOf->IsRemoteFrame())) {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
   MaybeCreateDocShell();
   RefPtr<nsDocShell> docShell = GetDocShell();
   NS_ENSURE_STATE(docShell);
 
   nsCOMPtr<Document> kungFuDeathGrip = docShell->GetDocument();
   Unused << kungFuDeathGrip;
+
+  if (aStaticCloneOf->IsRemoteFrame()) {
+    return DoRemoteStaticClone(aStaticCloneOf);
+  }
 
   nsCOMPtr<nsIContentViewer> viewer;
   docShell->GetContentViewer(getter_AddRefs(viewer));
@@ -3137,12 +3153,9 @@ class WebProgressListenerToPromise final : public nsIWebProgressListener {
   NS_IMETHOD OnStateChange(nsIWebProgress* aWebProgress, nsIRequest* aRequest,
                            uint32_t aStateFlags, nsresult aStatus) override {
     if (aStateFlags & nsIWebProgressListener::STATE_STOP &&
-        aStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT) {
-      MOZ_ASSERT(mPromise);
-      if (mPromise) {
-        mPromise->MaybeResolveWithUndefined();
-        mPromise = nullptr;
-      }
+        aStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT && mPromise) {
+      mPromise->MaybeResolveWithUndefined();
+      mPromise = nullptr;
     }
     return NS_OK;
   }

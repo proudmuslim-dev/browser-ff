@@ -32,7 +32,8 @@ Http3Stream::Http3Stream(nsAHttpTransaction* httpTransaction,
       mSocketTransport(session->SocketTransport()),
       mTotalSent(0),
       mTotalRead(0),
-      mFin(false) {
+      mFin(false),
+      mSendingBlockedByFlowControlCount(0) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("Http3Stream::Http3Stream [this=%p]", this));
 }
@@ -185,6 +186,9 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
       break;
     case SENDING_BODY: {
       rv = mSession->SendRequestBody(mStreamId, buf, count, countRead);
+      if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+        mSendingBlockedByFlowControlCount++;
+      }
       MOZ_ASSERT(mRequestBodyLenRemaining >= *countRead,
                  "We cannot send more that than we promised.");
       if (mRequestBodyLenRemaining < *countRead) {
@@ -204,6 +208,9 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
                                         NS_NET_STATUS_WAITING_FOR, 0);
         mSession->CloseSendingSide(mStreamId);
         mSendState = SEND_DONE;
+        Telemetry::Accumulate(
+            Telemetry::HTTP3_SENDING_BLOCKED_BY_FLOW_CONTROL_PER_TRANS,
+            mSendingBlockedByFlowControlCount);
       }
     } break;
     case EARLY_RESPONSE:
@@ -390,18 +397,21 @@ nsresult Http3Stream::Finish0RTT(bool aRestart) {
     if (trans) {
       trans->Refused0RTT();
     }
+
+    // Reset Http3Sream states as well.
+    mSendState = PREPARING_HEADERS;
+    mRecvState = READING_HEADERS;
+    mStreamId = UINT64_MAX;
+    mQueued = false;
+    mRequestBlockedOnRead = false;
+    mDataReceived = false;
+    mResetRecv = false;
+    mRequestBodyLenRemaining = 0;
+    mTotalSent = 0;
+    mTotalRead = 0;
+    mFin = false;
+    mSendingBlockedByFlowControlCount = 0;
   }
-  mSendState = PREPARING_HEADERS;
-  mRecvState = READING_HEADERS;
-  mStreamId = UINT64_MAX;
-  mQueued = false;
-  mRequestBlockedOnRead = false;
-  mDataReceived = false;
-  mResetRecv = false;
-  mRequestBodyLenRemaining = 0;
-  mTotalSent = 0;
-  mTotalRead = 0;
-  mFin = false;
 
   return rv;
 }

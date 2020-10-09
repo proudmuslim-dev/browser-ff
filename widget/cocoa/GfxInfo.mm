@@ -86,6 +86,8 @@ void GfxInfo::GetDeviceInfo() {
   io_iterator_t io_iter;
   if (IOServiceGetMatchingServices(kIOMasterPortDefault, pci_dev_dict, &io_iter) !=
       kIOReturnSuccess) {
+    MOZ_DIAGNOSTIC_ASSERT(false,
+                          "Failed to detect any GPUs (couldn't enumerate IOPCIDevice services)");
     return;
   }
 
@@ -119,6 +121,11 @@ void GfxInfo::GetDeviceInfo() {
     }
   }
   IOObjectRelease(io_iter);
+
+#if defined(__x86_64__)
+  // Until we support GPU detection for ARM hardware, skip this assert.
+  MOZ_DIAGNOSTIC_ASSERT(mNumGPUsDetected > 0, "Failed to detect any GPUs");
+#endif
 }
 
 nsresult GfxInfo::Init() {

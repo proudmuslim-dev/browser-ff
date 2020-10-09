@@ -504,7 +504,7 @@ TEST_F(GfxConfigManager, WebRenderForceAngleDisabled) {
 }
 
 TEST_F(GfxConfigManager, WebRenderD3D11HwAngleDisabled) {
-  mFeatures.mD3D11HwAngle.UserDisable("", EmptyCString());
+  mFeatures.mD3D11HwAngle.UserDisable("", ""_ns);
   ConfigureWebRender();
 
   EXPECT_TRUE(mFeatures.mWrQualified.IsEnabled());
@@ -520,7 +520,7 @@ TEST_F(GfxConfigManager, WebRenderD3D11HwAngleDisabled) {
 
 TEST_F(GfxConfigManager, WebRenderD3D11HwAngleAndForceAngleDisabled) {
   mWrForceAngle = false;
-  mFeatures.mD3D11HwAngle.UserDisable("", EmptyCString());
+  mFeatures.mD3D11HwAngle.UserDisable("", ""_ns);
   ConfigureWebRender();
 
   EXPECT_TRUE(mFeatures.mWrQualified.IsEnabled());
@@ -535,7 +535,7 @@ TEST_F(GfxConfigManager, WebRenderD3D11HwAngleAndForceAngleDisabled) {
 }
 
 TEST_F(GfxConfigManager, WebRenderGPUProcessDisabled) {
-  mFeatures.mGPUProcess.UserDisable("", EmptyCString());
+  mFeatures.mGPUProcess.UserDisable("", ""_ns);
   ConfigureWebRender();
 
   EXPECT_TRUE(mFeatures.mWrQualified.IsEnabled());
@@ -668,6 +668,7 @@ TEST_F(GfxConfigManager, WebRenderHighRefreshRateNightly) {
 TEST_F(GfxConfigManager, WebRenderHighRefreshRateNotNightly) {
   mIsNightly = false;
   mMockGfxInfo->mMaxRefreshRate = 120;
+  mMockGfxInfo->mVendorId = "0x8086";
   ConfigureWebRender();
 
   EXPECT_FALSE(mFeatures.mWrQualified.IsEnabled());
@@ -684,6 +685,7 @@ TEST_F(GfxConfigManager, WebRenderHighRefreshRateNotNightly) {
 TEST_F(GfxConfigManager, WebRenderAtRefreshRateThreshold) {
   mIsNightly = false;
   mMockGfxInfo->mMaxRefreshRate = 60;
+  mMockGfxInfo->mVendorId = "0x8086";
   ConfigureWebRender();
 
   EXPECT_TRUE(mFeatures.mWrQualified.IsEnabled());

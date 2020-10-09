@@ -170,8 +170,7 @@ void AccumulateCacheHitTelemetry(CacheDisposition hitOrMiss,
                                  nsIChannel* aChannel) {
   nsCString key("UNKNOWN");
 
-  nsCOMPtr<nsILoadInfo> loadInfo;
-  Unused << aChannel->GetLoadInfo(getter_AddRefs(loadInfo));
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
 
   nsAutoCString contentType;
   if (NS_SUCCEEDED(aChannel->GetContentType(contentType))) {
@@ -587,17 +586,18 @@ nsresult nsHttpChannel::OnBeforeConnect() {
     nsContentUtils::GetSecurityManager()->GetChannelResultPrincipal(
         this, getter_AddRefs(resultPrincipal));
   }
-  OriginAttributes originAttributes;
-  if (!StoragePrincipalHelper::GetOriginAttributes(
-          this, originAttributes, StoragePrincipalHelper::eRegularPrincipal)) {
-    return NS_ERROR_FAILURE;
-  }
 
   // At this point it is no longer possible to call
   // HttpBaseChannel::UpgradeToSecure.
   mUpgradableToSecure = false;
   bool shouldUpgrade = mUpgradeToSecure;
   if (mURI->SchemeIs("http")) {
+    OriginAttributes originAttributes;
+    if (!StoragePrincipalHelper::GetOriginAttributesForNetworkState(
+            this, originAttributes)) {
+      return NS_ERROR_FAILURE;
+    }
+
     if (!shouldUpgrade) {
       // Make sure http channel is released on main thread.
       // See bug 1539148 for details.
@@ -634,7 +634,7 @@ nsresult nsHttpChannel::OnBeforeConnect() {
       if (httpOnlyStatus &
           nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_NOT_REGISTERED) {
         RefPtr<nsHTTPSOnlyStreamListener> httpsOnlyListener =
-            new nsHTTPSOnlyStreamListener(mListener);
+            new nsHTTPSOnlyStreamListener(mListener, mLoadInfo);
         mListener = httpsOnlyListener;
 
         httpOnlyStatus ^=
@@ -1599,9 +1599,8 @@ nsresult ProcessXCTO(nsHttpChannel* aChannel, nsIURI* aURI,
   }
 
   auto policyType = aLoadInfo->GetExternalContentPolicyType();
-  if ((policyType == nsIContentPolicy::TYPE_DOCUMENT ||
-       policyType == nsIContentPolicy::TYPE_SUBDOCUMENT) &&
-      gHttpHandler->IsDocumentNosniffEnabled()) {
+  if (policyType == nsIContentPolicy::TYPE_DOCUMENT ||
+      policyType == nsIContentPolicy::TYPE_SUBDOCUMENT) {
     // If the header XCTO nosniff is set for any browsing context, then
     // we set the skipContentSniffing flag on the Loadinfo. Within
     // GetMIMETypeFromContent we then bail early and do not do any sniffing.
@@ -1739,11 +1738,6 @@ nsresult EnsureMIMEOfScript(nsHttpChannel* aChannel, nsIURI* aURI,
   }
 
   if (block) {
-    // Do not block the load if the feature is not enabled.
-    if (!StaticPrefs::security_block_script_with_wrong_mime()) {
-      return NS_OK;
-    }
-
     ReportMimeTypeMismatch(aChannel, "BlockScriptWithWrongMimeType2", aURI,
                            contentType, Report::Error);
     return NS_ERROR_CORRUPTED_CONTENT;
@@ -1790,11 +1784,6 @@ nsresult EnsureMIMEOfScript(nsHttpChannel* aChannel, nsIURI* aURI,
   // We restrict importScripts() in worker code to JavaScript MIME types.
   nsContentPolicyType internalType = aLoadInfo->InternalContentPolicyType();
   if (internalType == nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS) {
-    // Do not block the load if the feature is not enabled.
-    if (!StaticPrefs::security_block_importScripts_with_wrong_mime()) {
-      return NS_OK;
-    }
-
     ReportMimeTypeMismatch(aChannel, "BlockImportScriptsWithWrongMimeType",
                            aURI, contentType, Report::Error);
     return NS_ERROR_CORRUPTED_CONTENT;
@@ -1883,31 +1872,6 @@ void nsHttpChannel::SetCachedContentType() {
   }
 
   mCacheEntry->SetContentType(contentType);
-}
-
-void nsHttpChannel::UpdateAntiTrackingInfo() {
-  Unused << mLoadInfo->SetHasStoragePermission(
-      AntiTrackingUtils::HasStoragePermissionInParent(this));
-
-  AntiTrackingUtils::ComputeIsThirdPartyToTopWindow(this);
-
-  if (mLoadInfo->GetExternalContentPolicyType() ==
-      nsIContentPolicy::TYPE_DOCUMENT) {
-    nsCOMPtr<nsICookieJarSettings> cookieJarSettings;
-    Unused << mLoadInfo->GetCookieJarSettings(
-        getter_AddRefs(cookieJarSettings));
-
-    // Update the IsOnContentBlockingAllowList flag in the CookieJarSettings
-    // if this is a top level loading. For sub-document loading, this flag
-    // would inherit from the parent.
-    mozilla::net::CookieJarSettings::Cast(cookieJarSettings)
-        ->UpdateIsOnContentBlockingAllowList(this);
-
-    // We only need to set FPD for top-level loads. FPD will automatically be
-    // propagated to non-top level loads via CookieJarSetting.
-    mozilla::net::CookieJarSettings::Cast(cookieJarSettings)
-        ->SetPartitionKey(mURI);
-  }
 }
 
 nsresult nsHttpChannel::CallOnStartRequest() {
@@ -2274,8 +2238,11 @@ nsresult nsHttpChannel::ProcessSingleSecurityHeader(
     // Process header will now discard the headers itself if the channel
     // wasn't secure (whereas before it had to be checked manually)
     OriginAttributes originAttributes;
-    StoragePrincipalHelper::GetOriginAttributes(
-        this, originAttributes, StoragePrincipalHelper::eRegularPrincipal);
+    if (NS_WARN_IF(!StoragePrincipalHelper::GetOriginAttributesForHSTS(
+            this, originAttributes))) {
+      return NS_ERROR_FAILURE;
+    }
+
     uint32_t failureResult;
     uint32_t headerSource = nsISiteSecurityService::SOURCE_ORGANIC_REQUEST;
     rv = sss->ProcessHeader(aType, mURI, securityHeader, aSecInfo, aFlags,
@@ -4324,8 +4291,8 @@ bypassCacheEntryOpen:
                                             getter_AddRefs(cacheStorage));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = cacheStorage->AsyncOpenURI(mURI, EmptyCString(),
-                                  nsICacheStorage::OPEN_TRUNCATE, this);
+  rv = cacheStorage->AsyncOpenURI(mURI, ""_ns, nsICacheStorage::OPEN_TRUNCATE,
+                                  this);
   NS_ENSURE_SUCCESS(rv, rv);
 
   waitFlags.Keep(WAIT_FOR_OFFLINE_CACHE_ENTRY);
@@ -6764,7 +6731,7 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
     UpdatePrivateBrowsing();
   }
 
-  UpdateAntiTrackingInfo();
+  AntiTrackingUtils::UpdateAntiTrackingInfoForChannel(this);
 
   if (WaitingForTailUnblock()) {
     // This channel is marked as Tail and is part of a request context
@@ -7001,7 +6968,7 @@ nsresult nsHttpChannel::BeginConnect() {
                                          mCallbacks, originAttributes);
 
   RefPtr<nsHttpConnectionInfo> connInfo = new nsHttpConnectionInfo(
-      host, port, EmptyCString(), mUsername, GetTopWindowOrigin(), proxyInfo,
+      host, port, ""_ns, mUsername, GetTopWindowOrigin(), proxyInfo,
       originAttributes, isHttps);
   bool http2Allowed = !gHttpHandler->IsHttp2Excluded(connInfo);
   bool http3Allowed = !mUpgradeProtocolCallback && !mProxyInfo &&
@@ -9477,7 +9444,7 @@ void nsHttpChannel::DoInvalidateCacheEntry(nsIURI* aURI) {
   }
 
   if (NS_SUCCEEDED(rv)) {
-    rv = cacheStorage->AsyncDoomURI(aURI, EmptyCString(), nullptr);
+    rv = cacheStorage->AsyncDoomURI(aURI, ""_ns, nullptr);
   }
 
   LOG(("DoInvalidateCacheEntry [channel=%p key=%s rv=%d]", this, key.get(),

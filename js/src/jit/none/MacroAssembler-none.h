@@ -7,12 +7,13 @@
 #ifndef jit_none_MacroAssembler_none_h
 #define jit_none_MacroAssembler_none_h
 
-#include "jit/JitRealm.h"
 #include "jit/MoveResolver.h"
 #include "jit/shared/Assembler-shared.h"
 
 namespace js {
 namespace jit {
+
+class CompactBufferReader;
 
 static constexpr Register StackPointer{Registers::invalid_reg};
 static constexpr Register FramePointer{Registers::invalid_reg};
@@ -100,7 +101,7 @@ static constexpr Register WasmTlsReg{Registers::invalid_reg};
 static constexpr Register WasmJitEntryReturnScratch{Registers::invalid_reg};
 
 static constexpr uint32_t ABIStackAlignment = 4;
-static constexpr uint32_t CodeAlignment = sizeof(void*);
+static constexpr uint32_t CodeAlignment = 16;
 static constexpr uint32_t JitStackAlignment = 8;
 static constexpr uint32_t JitStackValueAlignment =
     JitStackAlignment / sizeof(Value);

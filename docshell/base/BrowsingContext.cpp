@@ -46,6 +46,7 @@
 #include "mozilla/StaticPrefs_page_load.h"
 #include "mozilla/StaticPtr.h"
 #include "nsIURIFixup.h"
+#include "nsIXULRuntime.h"
 
 #include "nsDocShell.h"
 #include "nsFocusManager.h"
@@ -224,7 +225,8 @@ bool BrowsingContext::SameOriginWithTop() {
 /* static */
 already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
     nsGlobalWindowInner* aParent, BrowsingContext* aOpener,
-    BrowsingContextGroup* aSpecificGroup, const nsAString& aName, Type aType) {
+    BrowsingContextGroup* aSpecificGroup, const nsAString& aName, Type aType,
+    bool aCreatedDynamically) {
   if (aParent) {
     MOZ_DIAGNOSTIC_ASSERT(aParent->GetWindowContext());
     MOZ_DIAGNOSTIC_ASSERT(aParent->GetBrowsingContext()->mType == aType);
@@ -336,6 +338,7 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
   }
 
   context->mEmbeddedByThisProcess = XRE_IsParentProcess() || aParent;
+  context->mCreatedDynamically = aCreatedDynamically;
   if (inherit) {
     context->mPrivateBrowsingId = inherit->mPrivateBrowsingId;
     context->mUseRemoteTabs = inherit->mUseRemoteTabs;
@@ -359,7 +362,7 @@ already_AddRefed<BrowsingContext> BrowsingContext::CreateDetached(
 already_AddRefed<BrowsingContext> BrowsingContext::CreateIndependent(
     Type aType) {
   RefPtr<BrowsingContext> bc(
-      CreateDetached(nullptr, nullptr, nullptr, EmptyString(), aType));
+      CreateDetached(nullptr, nullptr, nullptr, u""_ns, aType));
   bc->mWindowless = bc->IsContent();
   bc->mEmbeddedByThisProcess = true;
   bc->EnsureAttached();
@@ -409,9 +412,10 @@ void BrowsingContext::CreateFromIPC(BrowsingContext::IPCInitializer&& aInit,
   }
 
   context->mWindowless = aInit.mWindowless;
+  context->mCreatedDynamically = aInit.mCreatedDynamically;
   if (context->GetHasSessionHistory()) {
     context->CreateChildSHistory();
-    if (StaticPrefs::fission_sessionHistoryInParent()) {
+    if (mozilla::SessionHistoryInParent()) {
       context->GetChildSessionHistory()->SetIndexAndLength(
           aInit.mSessionHistoryIndex, aInit.mSessionHistoryCount, nsID());
     }
@@ -447,7 +451,8 @@ BrowsingContext::BrowsingContext(WindowContext* aParentWindow,
       mDanglingRemoteOuterProxies(false),
       mEmbeddedByThisProcess(false),
       mUseRemoteTabs(false),
-      mUseRemoteSubframes(false) {
+      mUseRemoteSubframes(false),
+      mCreatedDynamically(false) {
   MOZ_RELEASE_ASSERT(!mParentWindow || mParentWindow->Group() == mGroup);
   MOZ_RELEASE_ASSERT(mBrowsingContextId != 0);
   MOZ_RELEASE_ASSERT(mGroup);
@@ -842,14 +847,21 @@ void BrowsingContext::UnregisterWindowContext(WindowContext* aWindow) {
 void BrowsingContext::PreOrderWalk(
     const std::function<void(BrowsingContext*)>& aCallback) {
   aCallback(this);
-  for (auto& child : Children()) {
+
+  AutoTArray<RefPtr<BrowsingContext>, 8> children;
+  children.AppendElements(Children());
+
+  for (auto& child : children) {
     child->PreOrderWalk(aCallback);
   }
 }
 
 void BrowsingContext::PostOrderWalk(
     const std::function<void(BrowsingContext*)>& aCallback) {
-  for (auto& child : Children()) {
+  AutoTArray<RefPtr<BrowsingContext>, 8> children;
+  children.AppendElements(Children());
+
+  for (auto& child : children) {
     child->PostOrderWalk(aCallback);
   }
 
@@ -2071,8 +2083,9 @@ BrowsingContext::IPCInitializer BrowsingContext::GetIPCInitializer() {
   init.mWindowless = mWindowless;
   init.mUseRemoteTabs = mUseRemoteTabs;
   init.mUseRemoteSubframes = mUseRemoteSubframes;
+  init.mCreatedDynamically = mCreatedDynamically;
   init.mOriginAttributes = mOriginAttributes;
-  if (mChildSessionHistory && StaticPrefs::fission_sessionHistoryInParent()) {
+  if (mChildSessionHistory && mozilla::SessionHistoryInParent()) {
     init.mSessionHistoryIndex = mChildSessionHistory->Index();
     init.mSessionHistoryCount = mChildSessionHistory->Count();
   }
@@ -2489,6 +2502,19 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AncestorLoading>) {
   }
 }
 
+void BrowsingContext::DidSet(FieldIndex<IDX_AuthorStyleDisabledDefault>) {
+  MOZ_ASSERT(IsTop(),
+             "Should only set AuthorStyleDisabledDefault in the top "
+             "browsing context");
+
+  // We don't need to handle changes to this field, since PageStyleChild.jsm
+  // will respond to the PageStyle:Disable message in all content processes.
+  //
+  // But we store the state here on the top BrowsingContext so that the
+  // docshell has somewhere to look for the current author style disabling
+  // state when new iframes are inserted.
+}
+
 void BrowsingContext::DidSet(FieldIndex<IDX_TextZoom>, float aOldValue) {
   if (GetTextZoom() == aOldValue) {
     return;
@@ -2570,7 +2596,7 @@ void BrowsingContext::InitSessionHistory() {
 }
 
 ChildSHistory* BrowsingContext::GetChildSessionHistory() {
-  if (!StaticPrefs::fission_sessionHistoryInParent()) {
+  if (!mozilla::SessionHistoryInParent()) {
     // For now we're checking that the session history object for the child
     // process is available before returning the ChildSHistory object, because
     // it is the actual implementation that ChildSHistory forwards to. This can
@@ -2628,7 +2654,7 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_PendingInitialization>,
 
 void BrowsingContext::SessionHistoryChanged(int32_t aIndexDelta,
                                             int32_t aLengthDelta) {
-  if (XRE_IsParentProcess() || StaticPrefs::fission_sessionHistoryInParent()) {
+  if (XRE_IsParentProcess() || mozilla::SessionHistoryInParent()) {
     // This method is used to test index and length for the session history
     // in child process only.
     return;
@@ -2666,37 +2692,26 @@ bool BrowsingContext::IsPopupAllowed() {
   return false;
 }
 
-void BrowsingContext::SetActiveSessionHistoryEntryForTop(
+void BrowsingContext::SetActiveSessionHistoryEntry(
     const Maybe<nsPoint>& aPreviousScrollPos, SessionHistoryInfo* aInfo,
-    uint32_t aLoadType) {
+    uint32_t aLoadType, int32_t aChildOffset, uint32_t aUpdatedCacheKey) {
   if (XRE_IsContentProcess()) {
-    nsID changeID = {};
-    RefPtr<ChildSHistory> shistory = GetChildSessionHistory();
-    if (shistory) {
-      changeID = shistory->AddPendingHistoryChange(1, 1);
+    if (aUpdatedCacheKey != 0) {
+      aInfo->SetCacheKey(aUpdatedCacheKey);
     }
-    ContentChild::GetSingleton()->SendSetActiveSessionHistoryEntryForTop(
-        this, aPreviousScrollPos, *aInfo, aLoadType, changeID);
-  } else {
-    Canonical()->SetActiveSessionHistoryEntryForTop(aPreviousScrollPos, aInfo,
-                                                    aLoadType, nsID());
-  }
-}
 
-void BrowsingContext::SetActiveSessionHistoryEntryForFrame(
-    const Maybe<nsPoint>& aPreviousScrollPos, SessionHistoryInfo* aInfo,
-    int32_t aChildOffset) {
-  if (XRE_IsContentProcess()) {
     nsID changeID = {};
-    RefPtr<ChildSHistory> shistory = GetChildSessionHistory();
+    RefPtr<ChildSHistory> shistory = Top()->GetChildSessionHistory();
     if (shistory) {
-      changeID = shistory->AddPendingHistoryChange(1, 1);
+      changeID = shistory->AddPendingHistoryChange();
     }
-    ContentChild::GetSingleton()->SendSetActiveSessionHistoryEntryForFrame(
-        this, aPreviousScrollPos, *aInfo, aChildOffset, changeID);
+    ContentChild::GetSingleton()->SendSetActiveSessionHistoryEntry(
+        this, aPreviousScrollPos, *aInfo, aLoadType, aChildOffset,
+        aUpdatedCacheKey, changeID);
   } else {
-    Canonical()->SetActiveSessionHistoryEntryForFrame(aPreviousScrollPos, aInfo,
-                                                      aChildOffset, nsID());
+    Canonical()->SetActiveSessionHistoryEntry(aPreviousScrollPos, aInfo,
+                                              aLoadType, aChildOffset,
+                                              aUpdatedCacheKey, nsID());
   }
 }
 
@@ -2727,15 +2742,15 @@ void BrowsingContext::RemoveFromSessionHistory() {
   }
 }
 
-void BrowsingContext::HistoryGo(int32_t aIndex,
+void BrowsingContext::HistoryGo(int32_t aOffset,
                                 std::function<void(int32_t&&)>&& aResolver) {
   if (XRE_IsContentProcess()) {
     ContentChild::GetSingleton()->SendHistoryGo(
-        this, aIndex, std::move(aResolver),
+        this, aOffset, std::move(aResolver),
         [](mozilla::ipc::
                ResponseRejectReason) { /* FIXME Is ignoring this fine? */ });
   } else {
-    Canonical()->HistoryGo(aIndex, std::move(aResolver));
+    Canonical()->HistoryGo(aOffset, std::move(aResolver));
   }
 }
 
@@ -2751,6 +2766,56 @@ bool BrowsingContext::ShouldUpdateSessionHistory(uint32_t aLoadType) {
   return nsDocShell::ShouldUpdateGlobalHistory(aLoadType) &&
          (!(aLoadType & nsIDocShell::LOAD_CMD_RELOAD) ||
           (IsForceReloadType(aLoadType) && IsFrame()));
+}
+
+nsresult BrowsingContext::CheckLocationChangeRateLimit(CallerType aCallerType) {
+  // We only rate limit non system callers
+  if (aCallerType == CallerType::System) {
+    return NS_OK;
+  }
+
+  // Fetch rate limiting preferences
+  uint32_t limitCount =
+      StaticPrefs::dom_navigation_locationChangeRateLimit_count();
+  uint32_t timeSpanSeconds =
+      StaticPrefs::dom_navigation_locationChangeRateLimit_timespan();
+
+  // Disable throttling if either of the preferences is set to 0.
+  if (limitCount == 0 || timeSpanSeconds == 0) {
+    return NS_OK;
+  }
+
+  TimeDuration throttleSpan = TimeDuration::FromSeconds(timeSpanSeconds);
+
+  if (mLocationChangeRateLimitSpanStart.IsNull() ||
+      ((TimeStamp::Now() - mLocationChangeRateLimitSpanStart) > throttleSpan)) {
+    // Initial call or timespan exceeded, reset counter and timespan.
+    mLocationChangeRateLimitSpanStart = TimeStamp::Now();
+    mLocationChangeRateLimitCount = 1;
+    return NS_OK;
+  }
+
+  if (mLocationChangeRateLimitCount >= limitCount) {
+    // Rate limit reached
+
+    Document* doc = GetDocument();
+    if (doc) {
+      nsContentUtils::ReportToConsole(nsIScriptError::errorFlag, "DOM"_ns, doc,
+                                      nsContentUtils::eDOM_PROPERTIES,
+                                      "LocChangeFloodingPrevented");
+    }
+
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  mLocationChangeRateLimitCount++;
+  return NS_OK;
+}
+
+void BrowsingContext::ResetLocationChangeRateLimit() {
+  // Resetting the timestamp object will cause the check function to
+  // init again and reset the rate limit.
+  mLocationChangeRateLimitSpanStart = TimeStamp();
 }
 
 }  // namespace dom

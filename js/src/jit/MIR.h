@@ -23,6 +23,7 @@
 #include "builtin/ModuleObject.h"
 #include "jit/AtomicOp.h"
 #include "jit/BaselineIC.h"
+#include "jit/CompileInfo.h"
 #include "jit/FixedList.h"
 #include "jit/InlineList.h"
 #include "jit/JitAllocPolicy.h"
@@ -1677,19 +1678,6 @@ class MWasmFloatConstant : public MNullaryInstruction {
     return SimdConstant::CreateX16(u.s128_);
   }
 #endif
-};
-
-// Deep clone a constant JSObject.
-class MCloneLiteral : public MUnaryInstruction, public ObjectPolicy<0>::Data {
- protected:
-  explicit MCloneLiteral(MDefinition* obj)
-      : MUnaryInstruction(classOpcode, obj) {
-    setResultType(MIRType::Object);
-  }
-
- public:
-  INSTRUCTION_HEADER(CloneLiteral)
-  TRIVIAL_NEW_WRAPPERS
 };
 
 class MParameter : public MNullaryInstruction {
@@ -3800,6 +3788,36 @@ class MArgumentsObjectLength : public MUnaryInstruction,
   }
 };
 
+// Guard that the |ArgumentsObject::ITERATOR_OVERRIDDEN_BIT| flag isn't set.
+class MGuardArgumentsObjectNotOverriddenIterator
+    : public MUnaryInstruction,
+      public SingleObjectPolicy::Data {
+  explicit MGuardArgumentsObjectNotOverriddenIterator(MDefinition* argsObj)
+      : MUnaryInstruction(classOpcode, argsObj) {
+    setResultType(MIRType::Object);
+    setResultTypeSet(argsObj->resultTypeSet());
+    setMovable();
+    setGuard();
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardArgumentsObjectNotOverriddenIterator)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, getArgsObject))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+
+  AliasSet getAliasSet() const override {
+    // Even though the "iterator" property is lazily resolved, it acts similar
+    // to a normal property load, so we can treat this operation like any other
+    // property read.
+    return AliasSet::Load(AliasSet::ObjectFields | AliasSet::FixedSlot |
+                          AliasSet::DynamicSlot);
+  }
+};
+
 // Given a MIRType::Value A and a MIRType::Object B:
 // If the Value may be safely unboxed to an Object, return Object(A).
 // Otherwise, return B.
@@ -3815,6 +3833,12 @@ class MReturnFromCtor : public MBinaryInstruction,
   INSTRUCTION_HEADER(ReturnFromCtor)
   TRIVIAL_NEW_WRAPPERS
   NAMED_OPERANDS((0, getValue), (1, getObject))
+
+  MDefinition* foldsTo(TempAllocator& alloc) override;
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
 
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 };
@@ -4592,26 +4616,22 @@ class MToString : public MUnaryInstruction, public ToStringPolicy::Data {
       : MUnaryInstruction(classOpcode, def), sideEffects_(sideEffects) {
     setResultType(MIRType::String);
 
-    if (JitOptions.warpBuilder) {
+    if (!def->definitelyType({MIRType::Undefined, MIRType::Null,
+                              MIRType::Boolean, MIRType::Int32, MIRType::Double,
+                              MIRType::Float32, MIRType::String,
+                              MIRType::BigInt})) {
       mightHaveSideEffects_ = true;
-    } else {
-      if (!def->definitelyType({MIRType::Undefined, MIRType::Null,
-                                MIRType::Boolean, MIRType::Int32,
-                                MIRType::Double, MIRType::Float32,
-                                MIRType::String, MIRType::BigInt})) {
-        mightHaveSideEffects_ = true;
-      }
+    }
 
-      // If this instruction is not effectful, mark it as movable and set the
-      // Guard flag if needed. If the operation is effectful it won't be
-      // optimized anyway so there's no need to set any flags.
-      if (!isEffectful()) {
-        setMovable();
-        // Objects might override toString; Symbol throws. We bailout in those
-        // cases and run side-effects in baseline instead.
-        if (mightHaveSideEffects_) {
-          setGuard();
-        }
+    // If this instruction is not effectful, mark it as movable and set the
+    // Guard flag if needed. If the operation is effectful it won't be
+    // optimized anyway so there's no need to set any flags.
+    if (!isEffectful()) {
+      setMovable();
+      // Objects might override toString; Symbol throws. We bailout in those
+      // cases and run side-effects in baseline instead.
+      if (mightHaveSideEffects_) {
+        setGuard();
       }
     }
   }
@@ -6367,6 +6387,8 @@ class MBoxNonStrictThis : public MUnaryInstruction, public BoxPolicy<0>::Data {
   INSTRUCTION_HEADER(BoxNonStrictThis)
   TRIVIAL_NEW_WRAPPERS
 
+  MDefinition* foldsTo(TempAllocator& alloc) override;
+
   JSObject* globalThis() const { return globalThis_; }
 
   bool possiblyCalls() const override { return true; }
@@ -6561,11 +6583,17 @@ class MPhi final : public MDefinition,
   }
 
   // Use only if capacity has been reserved by reserveLength
-  void addInput(MDefinition* ins) { inputs_.infallibleEmplaceBack(ins, this); }
+  void addInput(MDefinition* ins) {
+    MOZ_ASSERT_IF(JitOptions.warpBuilder && type() != MIRType::Value,
+                  ins->type() == type());
+    inputs_.infallibleEmplaceBack(ins, this);
+  }
 
   // Appends a new input to the input vector. May perform reallocation.
   // Prefer reserveLength() and addInput() instead, where possible.
   MOZ_MUST_USE bool addInputSlow(MDefinition* ins) {
+    MOZ_ASSERT_IF(JitOptions.warpBuilder && type() != MIRType::Value,
+                  ins->type() == type());
     return inputs_.emplaceBack(ins, this);
   }
 
@@ -7673,6 +7701,34 @@ class MFunctionLength : public MUnaryInstruction,
 
   AliasSet getAliasSet() const override {
     // Even though the "length" property is lazily resolved, it acts similar to
+    // a normal property load, so we can treat this operation like any other
+    // property read.
+    return AliasSet::Load(AliasSet::ObjectFields | AliasSet::FixedSlot |
+                          AliasSet::DynamicSlot);
+  }
+};
+
+// Load the function name. Bails for bound functions when the bound function
+// name prefix isn't present or functions with a resolved "name" property.
+class MFunctionName : public MUnaryInstruction,
+                      public SingleObjectPolicy::Data {
+  explicit MFunctionName(MDefinition* fun)
+      : MUnaryInstruction(classOpcode, fun) {
+    setResultType(MIRType::String);
+    setGuard();
+  }
+
+ public:
+  INSTRUCTION_HEADER(FunctionName)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, function))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+
+  AliasSet getAliasSet() const override {
+    // Even though the "name" property is lazily resolved, it acts similar to
     // a normal property load, so we can treat this operation like any other
     // property read.
     return AliasSet::Load(AliasSet::ObjectFields | AliasSet::FixedSlot |
@@ -9912,6 +9968,28 @@ class MGuardIsNotArrayBufferMaybeShared : public MUnaryInstruction,
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 };
 
+// Guard the object is a TypedArray object.
+class MGuardIsTypedArray : public MUnaryInstruction,
+                           public SingleObjectPolicy::Data {
+  explicit MGuardIsTypedArray(MDefinition* obj)
+      : MUnaryInstruction(classOpcode, obj) {
+    setGuard();
+    setMovable();
+    setResultType(MIRType::Object);
+    setResultTypeSet(obj->resultTypeSet());
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardIsTypedArray)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, object))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins);
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
+};
+
 // Loads a specific JSObject* that was originally nursery-allocated.
 // See also WarpObjectField.
 class MNurseryObject : public MNullaryInstruction {
@@ -10023,14 +10101,18 @@ class MGuardNullOrUndefined : public MUnaryInstruction,
 // Guard on function flags
 class MGuardFunctionFlags : public MUnaryInstruction,
                             public SingleObjectPolicy::Data {
-  uint16_t flags_;
-  bool bailWhenSet_;
+  uint16_t expectedFlags_;
+  uint16_t unexpectedFlags_;
 
-  explicit MGuardFunctionFlags(MDefinition* fun, uint16_t flags,
-                               bool bailWhenSet)
+  explicit MGuardFunctionFlags(MDefinition* fun, uint16_t expectedFlags,
+                               uint16_t unexpectedFlags)
       : MUnaryInstruction(classOpcode, fun),
-        flags_(flags),
-        bailWhenSet_(bailWhenSet) {
+        expectedFlags_(expectedFlags),
+        unexpectedFlags_(unexpectedFlags) {
+    MOZ_ASSERT((expectedFlags & unexpectedFlags) == 0,
+               "Can't guard inconsistent flags");
+    MOZ_ASSERT((expectedFlags | unexpectedFlags) != 0,
+               "Can't guard zero flags");
     setGuard();
     setMovable();
     setResultType(MIRType::Object);
@@ -10042,17 +10124,17 @@ class MGuardFunctionFlags : public MUnaryInstruction,
   TRIVIAL_NEW_WRAPPERS
   NAMED_OPERANDS((0, function))
 
-  uint16_t flags() const { return flags_; };
-  bool bailWhenSet() const { return bailWhenSet_; }
+  uint16_t expectedFlags() const { return expectedFlags_; };
+  uint16_t unexpectedFlags() const { return unexpectedFlags_; };
 
   bool congruentTo(const MDefinition* ins) const override {
     if (!ins->isGuardFunctionFlags()) {
       return false;
     }
-    if (flags() != ins->toGuardFunctionFlags()->flags()) {
+    if (expectedFlags() != ins->toGuardFunctionFlags()->expectedFlags()) {
       return false;
     }
-    if (bailWhenSet() != ins->toGuardFunctionFlags()->bailWhenSet()) {
+    if (unexpectedFlags() != ins->toGuardFunctionFlags()->unexpectedFlags()) {
       return false;
     }
     return congruentIfOperandsEqual(ins);
@@ -12861,6 +12943,47 @@ class MLoadWrapperTarget : public MUnaryInstruction,
 
   bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins);
+  }
+};
+
+// Guard the accessor shape is present on the object or its prototype chain.
+class MGuardHasGetterSetter : public MUnaryInstruction,
+                              public SingleObjectPolicy::Data {
+  CompilerShape shape_;
+
+  MGuardHasGetterSetter(MDefinition* obj, Shape* shape)
+      : MUnaryInstruction(classOpcode, obj), shape_(shape) {
+    setResultType(MIRType::Object);
+    setResultTypeSet(obj->resultTypeSet());
+    setMovable();
+    setGuard();
+  }
+
+ public:
+  INSTRUCTION_HEADER(GuardHasGetterSetter)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, object))
+
+  Shape* shape() const { return shape_; }
+
+  AliasSet getAliasSet() const override {
+    return AliasSet::Load(AliasSet::ObjectFields);
+  }
+
+  bool congruentTo(const MDefinition* ins) const override {
+    if (!ins->isGuardHasGetterSetter()) {
+      return false;
+    }
+    if (ins->toGuardHasGetterSetter()->shape() != shape()) {
+      return false;
+    }
+    return congruentIfOperandsEqual(ins);
+  }
+
+  bool possiblyCalls() const override { return true; }
+
+  bool appendRoots(MRootList& roots) const override {
+    return roots.append(shape_);
   }
 };
 

@@ -49,7 +49,7 @@ namespace frontend {
 
 class ParserAtom;
 class ParserAtomEntry;
-class WellKnownParserAtoms;
+class WellKnownParserAtoms_ROM;
 
 }  // namespace frontend
 
@@ -664,22 +664,8 @@ class JSString : public js::gc::CellWithLengthAndFlags {
 
   void traceChildren(JSTracer* trc);
 
-  static MOZ_ALWAYS_INLINE void readBarrier(JSString* thing) {
-    if (!thing->isPermanentAtom()) {
-      Cell::readBarrier(thing);
-    }
-  }
-
-  static MOZ_ALWAYS_INLINE void writeBarrierPre(JSString* thing) {
-    if (thing && !thing->isPermanentAtom()) {
-      Cell::writeBarrierPre(thing);
-    }
-  }
-
-  static MOZ_ALWAYS_INLINE void writeBarrierPost(void* cellp, JSString* prev,
-                                                 JSString* next) {
-    js::gc::WriteBarrierPostImpl<JSString>(cellp, prev, next);
-  }
+  // Override base class implementation to tell GC about permanent atoms.
+  bool isPermanentAndMayBeShared() const { return isPermanentAtom(); }
 
   static void addCellAddressToStoreBuffer(js::gc::StoreBuffer* buffer,
                                           js::gc::Cell** cellp) {
@@ -1272,7 +1258,7 @@ class StaticStrings {
   // NOTE: The WellKnownParserAtoms rely on these tables and may need to be
   //       update if these tables are changed.
   friend class js::frontend::ParserAtomEntry;
-  friend class js::frontend::WellKnownParserAtoms;
+  friend class js::frontend::WellKnownParserAtoms_ROM;
 
  private:
   /* Bigger chars cannot be in a length-2 string. */
@@ -1424,6 +1410,47 @@ class StaticStrings {
     return getLength2FromIndex(getLength2Index(c1, c2));
   }
 };
+
+/*
+ * Declare length-2 strings. We only store strings where both characters are
+ * alphanumeric. The lower 10 short chars are the numerals, the next 26 are
+ * the lowercase letters, and the next 26 are the uppercase letters.
+ */
+
+constexpr Latin1Char StaticStrings::fromSmallChar(SmallChar c) {
+  if (c < 10) {
+    return c + '0';
+  }
+  if (c < 36) {
+    return c + 'a' - 10;
+  }
+  if (c < 62) {
+    return c + 'A' - 36;
+  }
+  if (c == 62) {
+    return '$';
+  }
+  return '_';
+}
+
+constexpr StaticStrings::SmallChar StaticStrings::toSmallChar(uint32_t c) {
+  if (mozilla::IsAsciiDigit(c)) {
+    return c - '0';
+  }
+  if (mozilla::IsAsciiLowercaseAlpha(c)) {
+    return c - 'a' + 10;
+  }
+  if (mozilla::IsAsciiUppercaseAlpha(c)) {
+    return c - 'A' + 36;
+  }
+  if (c == '$') {
+    return 62;
+  }
+  if (c == '_') {
+    return 63;
+  }
+  return StaticStrings::INVALID_SMALL_CHAR;
+}
 
 /*
  * Represents an atomized string which does not contain an index (that is, an

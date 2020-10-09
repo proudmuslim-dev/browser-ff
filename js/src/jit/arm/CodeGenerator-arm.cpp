@@ -15,7 +15,7 @@
 
 #include "jit/CodeGenerator.h"
 #include "jit/JitFrames.h"
-#include "jit/JitRealm.h"
+#include "jit/JitRuntime.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
 #include "js/Conversions.h"
@@ -1197,8 +1197,8 @@ void CodeGenerator::visitTruncateDToInt32(LTruncateDToInt32* ins) {
 
 void CodeGenerator::visitWasmBuiltinTruncateDToInt32(
     LWasmBuiltinTruncateDToInt32* ins) {
-  emitTruncateDoubleBuiltin(ToFloatRegister(ins->getOperand(0)),
-                            ToRegister(ins->getDef(0)), ins->mir());
+  emitTruncateDouble(ToFloatRegister(ins->getOperand(0)),
+                     ToRegister(ins->getDef(0)), ins->mir());
 }
 
 void CodeGenerator::visitTruncateFToInt32(LTruncateFToInt32* ins) {
@@ -1208,8 +1208,8 @@ void CodeGenerator::visitTruncateFToInt32(LTruncateFToInt32* ins) {
 
 void CodeGenerator::visitWasmBuiltinTruncateFToInt32(
     LWasmBuiltinTruncateFToInt32* ins) {
-  emitTruncateFloat32Builtin(ToFloatRegister(ins->getOperand(0)),
-                             ToRegister(ins->getDef(0)), ins->mir());
+  emitTruncateFloat32(ToFloatRegister(ins->getOperand(0)),
+                      ToRegister(ins->getDef(0)), ins->mir());
 }
 
 static const uint32_t FrameSizes[] = {128, 256, 512, 1024};

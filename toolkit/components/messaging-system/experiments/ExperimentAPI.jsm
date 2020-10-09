@@ -60,13 +60,9 @@ const ExperimentAPI = {
    * @returns {boolean}
    */
   isFeatureEnabled(featureId, defaultValue) {
-    try {
-      const featureConfig = this._store.getFeature(featureId);
-      if (featureConfig && featureConfig.enabled !== undefined) {
-        return featureConfig.enabled;
-      }
-    } catch (e) {
-      Cu.reportError(e);
+    const featureConfig = this._store.getFeature(featureId);
+    if (featureConfig && featureConfig.enabled !== undefined) {
+      return featureConfig.enabled;
     }
     return defaultValue;
   },
@@ -127,9 +123,7 @@ const ExperimentAPI = {
       [recipe] = await this._remoteSettingsClient.get({
         // Do not sync the RS store, let RemoteSettingsExperimentLoader do that
         syncIfEmpty: false,
-        filters: {
-          "arguments.slug": slug,
-        },
+        filters: { slug },
       });
     } catch (e) {
       Cu.reportError(e);
@@ -156,7 +150,7 @@ const ExperimentAPI = {
     }
 
     const recipe = await this.getRecipe(slug);
-    return recipe?.arguments.branches;
+    return recipe?.branches;
   },
 };
 

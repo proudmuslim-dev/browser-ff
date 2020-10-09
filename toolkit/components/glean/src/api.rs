@@ -71,10 +71,30 @@ where
 pub fn initialize(cfg: Configuration, client_info: ClientInfo) -> Result<()> {
     STATE
         .get_or_try_init(|| {
-            let glean = Glean::new(cfg)?;
+            let mut glean = Glean::new(cfg)?;
 
             // First initialize core metrics
             initialize_core_metrics(&glean, &client_info);
+
+            // Then register builtin pings.
+            // Borrowed from glean-core's internal_pings.rs.
+            let mping = glean_core::metrics::PingType::new(
+                "metrics",
+                true,
+                false,
+                vec![
+                    "overdue".to_string(),
+                    "reschedule".to_string(),
+                    "today".to_string(),
+                    "tomorrow".to_string(),
+                    "upgrade".to_string(),
+                ],
+            );
+            glean.register_ping_type(&mping);
+            let bping = glean_core::metrics::PingType::new("baseline", true, false, vec![]);
+            glean.register_ping_type(&bping);
+            let eping = glean_core::metrics::PingType::new("events", true, false, vec![]);
+            glean.register_ping_type(&eping);
 
             // Now make this the global object available to others.
             setup_glean(glean)?;
@@ -193,7 +213,14 @@ pub fn set_debug_view_tag(value: &str) -> bool {
 }
 
 pub fn submit_ping(ping_name: &str) -> Result<bool> {
-    with_glean_mut(|glean| glean.submit_ping_by_name(ping_name, None)).unwrap_or(Ok(false))
+    match with_glean_mut(|glean| glean.submit_ping_by_name(ping_name, None)) {
+        Some(Ok(true)) => {
+            ping_upload::check_for_uploads();
+            Ok(true)
+        }
+        Some(result) => result,
+        None => Ok(false),
+    }
 }
 
 pub fn set_log_pings(value: bool) -> bool {

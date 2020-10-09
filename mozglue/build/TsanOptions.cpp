@@ -126,12 +126,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1600594
          "race:nsThread::SizeOfEventQueues\n"
 
-         // Bug 1600895, bug 1647702
-         "race:UpdateArenaPointersTyped<js::ObjectGroup>\n"
-         "race:UpdateArenaPointersTyped<js::Shape>\n"
-         "race:UpdateArenaPointersTyped<JSObject>\n"
-         "race:JSObject::fixupAfterMovingGC\n"
-
          // Bug 1601286
          "race:setFlagBit\n"
          "race:isFatInline\n"
@@ -156,10 +150,6 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:ScriptPreloader::MaybeFinishOffThreadDecode\n"
          "race:ScriptPreloader::DoFinishOffThreadDecode\n"
 
-         // Bug 1601980
-         "race:image::RasterImage::StartDecoding\n"
-         "race:image::RasterImage::OnImageDataAvailable\n"
-
          // Bug 1606651
          "race:nsPluginTag::nsPluginTag\n"
          "race:nsFakePluginTag\n"
@@ -173,23 +163,12 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1606804
          "deadlock:third_party/rust/rkv/src/env.rs\n"
 
-         // Bug 1606860
-         "race:majorGCCount\n"
-         "race:incMajorGcNumber\n"
-
          // Bug 1606864
          "race:nsSocketTransport::Close\n"
          "race:nsSocketTransport::OnSocketDetached\n"
 
-         // Bug 1607212
-         "race:CacheEntry::InvokeCallback\n"
-
          // Bug 1607138
          "race:gXPCOMThreadsShutDown\n"
-
-         // Bug 1607426
-         "race:PACLoadComplete::Run\n"
-         "race:nsPACMan::ProcessPending\n"
 
          // Bug 1607446
          "race:nsJARChannel::Suspend\n"
@@ -209,10 +188,6 @@ extern "C" const char* __tsan_default_suppressions() {
 
          // Bug 1607706
          "race:TemporaryIPCBlobParent::CreateAndShareFile\n"
-
-         // Bug 1607712
-         "race:GtkCompositorWidget::NotifyClientSizeChanged\n"
-         "race:GtkCompositorWidget::GetClientSize\n"
 
          // Bug 1607762
          "race:nsHtml5OwningUTF16Buffer::Release\n"
@@ -235,10 +210,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1615123
          "race:_dl_deallocate_tls\n"
          "race:__libc_memalign\n"
-
-         // Bug 1615121
-         "race:CacheEntry::Purge\n"
-         "race:CacheEntry::MetaDataReady\n"
 
          // Bug 1615265
          "race:ScriptPreloader::OffThreadDecodeCallback\n"

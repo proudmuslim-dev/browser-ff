@@ -211,7 +211,7 @@
 #include "mozilla/dom/BlobURLProtocolHandler.h"
 
 #ifdef MOZ_WEBRTC
-#  include "signaling/src/peerconnection/WebrtcGlobalChild.h"
+#  include "jsapi/WebrtcGlobalChild.h"
 #endif
 
 #include "mozilla/Permission.h"
@@ -919,7 +919,7 @@ nsresult ContentChild::ProvideWindowCommon(
     }
 
     if (name.LowerCaseEqualsLiteral("_blank")) {
-      name = EmptyString();
+      name.Truncate();
     }
 
     MOZ_DIAGNOSTIC_ASSERT(!nsContentUtils::IsSpecialName(name));
@@ -1061,7 +1061,7 @@ nsresult ContentChild::ProvideWindowCommon(
     }
 
     ParentShowInfo showInfo(
-        EmptyString(), /* fakeShowInfo = */ true, /* isTransparent = */ false,
+        u""_ns, /* fakeShowInfo = */ true, /* isTransparent = */ false,
         aTabOpener->WebWidget()->GetDPI(),
         aTabOpener->WebWidget()->RoundsWidgetCoordinatesTo(),
         aTabOpener->WebWidget()->GetDefaultScale().scale);
@@ -4124,7 +4124,7 @@ mozilla::ipc::IPCResult ContentChild::RecvLoadURI(
     nsCOMPtr<nsIURI> annotationURI;
 
     nsresult rv = NS_MutateURI(aLoadState->URI())
-                      .SetUserPass(EmptyCString())
+                      .SetUserPass(""_ns)
                       .Finalize(annotationURI);
 
     if (NS_FAILED(rv)) {
@@ -4164,7 +4164,7 @@ mozilla::ipc::IPCResult ContentChild::RecvInternalLoad(
     nsCOMPtr<nsIURI> annotationURI;
 
     nsresult rv = NS_MutateURI(aLoadState->URI())
-                      .SetUserPass(EmptyCString())
+                      .SetUserPass(""_ns)
                       .Finalize(annotationURI);
 
     if (NS_FAILED(rv)) {
@@ -4215,6 +4215,44 @@ mozilla::ipc::IPCResult ContentChild::RecvDispatchLocationChangeEvent(
     aContext.get()->GetDocShell()->DispatchLocationChangeEvent();
   }
   return IPC_OK();
+}
+
+mozilla::ipc::IPCResult ContentChild::RecvDispatchBeforeUnloadToSubtree(
+    const MaybeDiscarded<BrowsingContext>& aStartingAt,
+    DispatchBeforeUnloadToSubtreeResolver&& aResolver) {
+  if (aStartingAt.IsNullOrDiscarded()) {
+    aResolver(nsIContentViewer::eAllowNavigation);
+  } else {
+    DispatchBeforeUnloadToSubtree(aStartingAt.get(), std::move(aResolver));
+  }
+  return IPC_OK();
+}
+
+/* static */ void ContentChild::DispatchBeforeUnloadToSubtree(
+    BrowsingContext* aStartingAt,
+    const DispatchBeforeUnloadToSubtreeResolver& aResolver) {
+  bool resolved = false;
+
+  aStartingAt->PreOrderWalk([&](dom::BrowsingContext* aBC) {
+    if (aBC->GetDocShell()) {
+      nsCOMPtr<nsIContentViewer> contentViewer;
+      aBC->GetDocShell()->GetContentViewer(getter_AddRefs(contentViewer));
+      if (contentViewer &&
+          contentViewer->DispatchBeforeUnload() ==
+              nsIContentViewer::eRequestBlockNavigation &&
+          !resolved) {
+        // Send our response as soon as we find any blocker, so that we can show
+        // the permit unload prompt as soon as possible, without giving
+        // subsequent handlers a chance to delay it.
+        aResolver(nsIContentViewer::eRequestBlockNavigation);
+        resolved = true;
+      }
+    }
+  });
+
+  if (!resolved) {
+    aResolver(nsIContentViewer::eAllowNavigation);
+  }
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvGoBack(

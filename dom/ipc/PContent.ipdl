@@ -105,6 +105,7 @@ using mozilla::CrossProcessMutexHandle from "mozilla/ipc/CrossProcessMutex.h";
 using mozilla::dom::MaybeDiscardedBrowsingContext from "mozilla/dom/BrowsingContext.h";
 using mozilla::dom::BrowsingContextTransaction from "mozilla/dom/BrowsingContext.h";
 using mozilla::dom::BrowsingContextInitializer from "mozilla/dom/BrowsingContext.h";
+using mozilla::dom::PermitUnloadResult from "mozilla/dom/DocShellMessageUtils.h";
 using mozilla::dom::MaybeDiscardedWindowContext from "mozilla/dom/WindowContext.h";
 using mozilla::dom::WindowContextTransaction from "mozilla/dom/WindowContext.h";
 using base::SharedMemoryHandle from "base/shared_memory.h";
@@ -451,6 +452,12 @@ parent:
                                 TabId tabId, IPCTabContext context,
                                 WindowGlobalInit windowInit,
                                 uint32_t chromeFlags);
+
+    // TODO: Do I need to make this return something to watch for completion?
+    // Guess we'll see how we end up triggering the actual print, for preview
+    // this should be enough...
+    async CloneDocumentTreeInto(MaybeDiscardedBrowsingContext aSourceBc,
+                                MaybeDiscardedBrowsingContext aTargetBc);
 
 child:
     async ConstructBrowser(ManagedEndpoint<PBrowserChild> browserEp,
@@ -922,6 +929,12 @@ child:
 
    async DispatchLocationChangeEvent(MaybeDiscardedBrowsingContext aContext);
 
+  // Dispatches a "beforeunload" event to each in-process content window in the
+  // subtree beginning at `aStartingAt`, and returns the result as documented in
+  // the `PermitUnloadResult` enum.
+  async DispatchBeforeUnloadToSubtree(MaybeDiscardedBrowsingContext aStartingAt)
+      returns (PermitUnloadResult result);
+
 parent:
     /**
      * This is a temporary way to pass index and length through parent process.
@@ -1042,7 +1055,7 @@ parent:
 
     async OpenNotificationSettings(Principal principal);
 
-    async AddMixedContentSecurityState(MaybeDiscardedWindowContext aContext, uint32_t aStateFlags);
+    async AddSecurityState(MaybeDiscardedWindowContext aContext, uint32_t aStateFlags);
 
     // Request that the ServiceWorkerManager in the parent process create a
     // notification "click" or "close" event and dispatch it on the relevant
@@ -1666,7 +1679,8 @@ parent:
 
     async HistoryReload(MaybeDiscardedBrowsingContext aContext, uint32_t aReloadFlags);
 
-    async NotifyOnHistoryReload(MaybeDiscardedBrowsingContext aContext)
+    async NotifyOnHistoryReload(MaybeDiscardedBrowsingContext aContext,
+                                bool aForceReload)
             returns (bool canReload, nsDocShellLoadState? loadState,
                      bool? reloadActiveEntry);
 
@@ -1683,15 +1697,13 @@ parent:
                              nsID? aAgentClusterId)
       returns (BlobURLDataRequestResult aResult);
 
-    async SetActiveSessionHistoryEntryForTop(MaybeDiscardedBrowsingContext aContext,
+    async SetActiveSessionHistoryEntry(MaybeDiscardedBrowsingContext context,
                                        nsPoint? previousScrollPosition,
                                        SessionHistoryInfo info, uint32_t loadType,
-                                       nsID changeID);
-    async SetActiveSessionHistoryEntryForFrame(
-        MaybeDiscardedBrowsingContext aContext, nsPoint? previousScrollPosition,
-        SessionHistoryInfo info, int32_t childOffset, nsID changeID);
+                                       int32_t childOffset,
+                                       uint32_t updatedCacheKey, nsID changeID);
     async ReplaceActiveSessionHistoryEntry(
-        MaybeDiscardedBrowsingContext aContext, SessionHistoryInfo info);
+        MaybeDiscardedBrowsingContext context, SessionHistoryInfo info);
 
     async RemoveDynEntriesFromActiveSessionHistoryEntry(
         MaybeDiscardedBrowsingContext aContext);

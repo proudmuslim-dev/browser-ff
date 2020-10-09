@@ -113,6 +113,9 @@ class NewRenderer : public RendererEvent {
     bool supportPictureCaching = isMainWindow;
     wr::Renderer* wrRenderer = nullptr;
     char* errorMessage = nullptr;
+    int picTileWidth = StaticPrefs::gfx_webrender_picture_tile_width();
+    int picTileHeight = StaticPrefs::gfx_webrender_picture_tile_height();
+
     if (!wr_window_new(
             aWindowId, mSize.width, mSize.height,
             supportLowPriorityTransactions, supportLowPriorityThreadpool,
@@ -139,11 +142,12 @@ class NewRenderer : public RendererEvent {
             compositor->ShouldUseNativeCompositor() ? compositor.get()
                                                     : nullptr,
             compositor->GetMaxUpdateRects(),
+            compositor->UsePartialPresent() ? compositor.get() : nullptr,
             compositor->GetMaxPartialPresentRects(),
             compositor->ShouldDrawPreviousPartialPresentRegions(), mDocHandle,
             &wrRenderer, mMaxTextureSize, &errorMessage,
             StaticPrefs::gfx_webrender_enable_gpu_markers_AtStartup(),
-            panic_on_gl_error)) {
+            panic_on_gl_error, picTileWidth, picTileHeight)) {
       // wr_window_new puts a message into gfxCriticalNote if it returns false
       MOZ_ASSERT(errorMessage);
       mError->AssignASCII(errorMessage);
@@ -1130,14 +1134,21 @@ void DisplayListBuilder::PushRoundedRect(const wr::LayoutRect& aBounds,
            Stringify(aBounds).c_str(), Stringify(clip).c_str(),
            Stringify(aColor).c_str());
 
-  AutoTArray<wr::ComplexClipRegion, 1> clips;
-  clips.AppendElement(wr::SimpleRadii(aBounds, aBounds.size.width / 2));
-  // TODO: use `mCurrentSpaceAndClipChain.clip_chain` as a parent?
-  auto clipId = DefineClip(Nothing(), aBounds, &clips);
-  auto spaceAndClip = WrSpaceAndClip{mCurrentSpaceAndClipChain.space, clipId};
+  // Draw the rounded rectangle as a border with rounded corners. We could also
+  // draw this as a rectangle clipped to a rounded rectangle, but:
+  // - clips are not cached; borders are
+  // - a simple border like this will be drawn as an image
+  // - Processing lots of clips is not WebRender's strong point.
+  wr::BorderSide side = {aColor, wr::BorderStyle::Solid};
+  float h = aBounds.size.width / 2;
+  float v = aBounds.size.height / 2;
+  wr::LayoutSideOffsets widths = {v, h, v, h};
+  wr::BorderRadius radii = {{h, v}, {h, v}, {h, v}, {h, v}};
 
-  wr_dp_push_rect_with_parent_clip(mWrState, aBounds, clip, aIsBackfaceVisible,
-                                   &spaceAndClip, aColor);
+  // Anti-aliased borders are required for rounded borders.
+  wr_dp_push_border(mWrState, aBounds, clip, aIsBackfaceVisible,
+                    &mCurrentSpaceAndClipChain, wr::AntialiasBorder::Yes,
+                    widths, side, side, side, side, radii);
 }
 
 void DisplayListBuilder::PushHitTest(

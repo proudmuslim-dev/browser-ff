@@ -447,7 +447,7 @@ class EditorBase : public nsIEditor,
    */
   uint32_t Flags() const { return mFlags; }
 
-  nsresult AddFlags(uint32_t aFlags) {
+  MOZ_CAN_RUN_SCRIPT nsresult AddFlags(uint32_t aFlags) {
     const uint32_t kOldFlags = Flags();
     const uint32_t kNewFlags = (kOldFlags | aFlags);
     if (kNewFlags == kOldFlags) {
@@ -455,7 +455,7 @@ class EditorBase : public nsIEditor,
     }
     return SetFlags(kNewFlags);  // virtual call and may be expensive.
   }
-  nsresult RemoveFlags(uint32_t aFlags) {
+  MOZ_CAN_RUN_SCRIPT nsresult RemoveFlags(uint32_t aFlags) {
     const uint32_t kOldFlags = Flags();
     const uint32_t kNewFlags = (kOldFlags & ~aFlags);
     if (kNewFlags == kOldFlags) {
@@ -463,7 +463,8 @@ class EditorBase : public nsIEditor,
     }
     return SetFlags(kNewFlags);  // virtual call and may be expensive.
   }
-  nsresult AddAndRemoveFlags(uint32_t aAddingFlags, uint32_t aRemovingFlags) {
+  MOZ_CAN_RUN_SCRIPT nsresult AddAndRemoveFlags(uint32_t aAddingFlags,
+                                                uint32_t aRemovingFlags) {
     MOZ_ASSERT(!(aAddingFlags & aRemovingFlags),
                "Same flags are specified both adding and removing");
     const uint32_t kOldFlags = Flags();
@@ -861,11 +862,16 @@ class EditorBase : public nsIEditor,
      * dispatch "beforeinput" event or not.  Then,
      * mHasTriedToDispatchBeforeInputEvent is set to true.
      *
+     * @param aDeleteDirectionAndAmount
+     *                  If `MayEditActionDeleteAroundCollapsedSelection(
+     *                  mEditAction)` returns true, this must be set.
+     *                  Otherwise, don't set explicitly.
      * @return          If this method actually dispatches "beforeinput" event
      *                  and it's canceled, returns
      *                  NS_ERROR_EDITOR_ACTION_CANCELED.
      */
-    [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult MaybeDispatchBeforeInputEvent();
+    [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult MaybeDispatchBeforeInputEvent(
+        nsIEditor::EDirection aDeleteDirectionAndAmount = nsIEditor::eNone);
 
     /**
      * MarkAsBeforeInputHasBeenDispatched() should be called only when updating
@@ -1878,6 +1884,16 @@ class EditorBase : public nsIEditor,
    * UndefineCaretBidiLevel() resets bidi level of the caret.
    */
   void UndefineCaretBidiLevel() const;
+
+  /**
+   * Flushing pending notifications if nsFrameSelection requires the latest
+   * layout information to compute deletion range.  This may destroy the
+   * editor instance itself.  When this returns false, don't keep doing
+   * anything.
+   */
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT bool
+  FlushPendingNotificationsIfToHandleDeletionWithFrameSelection(
+      nsIEditor::EDirection aDirectionAndAmount) const;
 
   /**
    * DeleteSelectionAsSubAction() removes selection content or content around

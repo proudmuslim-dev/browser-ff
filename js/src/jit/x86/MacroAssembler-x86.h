@@ -7,7 +7,6 @@
 #ifndef jit_x86_MacroAssembler_x86_h
 #define jit_x86_MacroAssembler_x86_h
 
-#include "jit/JitFrames.h"
 #include "jit/MoveResolver.h"
 #include "jit/x86-shared/MacroAssembler-x86-shared.h"
 #include "js/HeapAPI.h"
@@ -143,20 +142,6 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared {
   }
   template <typename T>
   void storeValue(JSValueType type, Register reg, const T& dest) {
-#ifdef NIGHTLY_BUILD
-    // Bug 1485209 - Diagnostic assert for constructing Values with
-    // nullptr or misaligned (eg poisoned) JSObject/JSString pointers.
-    if (type == JSVAL_TYPE_OBJECT || type == JSVAL_TYPE_STRING) {
-      Label crash, ok;
-      testPtr(reg, Imm32(js::gc::CellAlignMask));
-      j(Assembler::NonZero, &crash);
-      testPtr(reg, reg);
-      j(Assembler::NonZero, &ok);
-      bind(&crash);
-      breakpoint();
-      bind(&ok);
-    }
-#endif
     storeTypeTag(ImmTag(JSVAL_TYPE_TO_TAG(type)), Operand(dest));
     storePayload(reg, Operand(dest));
   }

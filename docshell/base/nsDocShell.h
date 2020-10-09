@@ -373,6 +373,10 @@ class nsDocShell final : public nsDocLoader,
   // Update any pointers (mOSHE or mLSHE) to aOldEntry to point to aNewEntry
   void SwapHistoryEntries(nsISHEntry* aOldEntry, nsISHEntry* aNewEntry);
 
+  bool GetCreatedDynamically() const {
+    return mBrowsingContext && mBrowsingContext->CreatedDynamically();
+  }
+
   mozilla::gfx::Matrix5x4* GetColorMatrix() { return mColorMatrix.get(); }
 
   static bool SandboxFlagsImplyCookies(const uint32_t& aSandboxFlags);
@@ -702,6 +706,7 @@ class nsDocShell final : public nsDocLoader,
   nsresult ScrollToAnchor(bool aCurHasRef, bool aNewHasRef,
                           nsACString& aNewHash, uint32_t aLoadType);
 
+ private:
   // Returns true if would have called FireOnLocationChange,
   // but did not because aFireOnLocationChange was false on entry.
   // In this case it is the caller's responsibility to ensure
@@ -720,10 +725,10 @@ class nsDocShell final : public nsDocLoader,
                 nsIPrincipal* aTriggeringPrincipal,
                 nsIPrincipal* aPrincipalToInherit,
                 nsIPrincipal* aPartitionedPrincipalToInehrit,
-                uint32_t aLoadType, nsIContentSecurityPolicy* aCsp,
-                bool aFireOnLocationChange, bool aAddToGlobalHistory,
-                bool aCloneSHChildren);
+                nsIContentSecurityPolicy* aCsp, bool aFireOnLocationChange,
+                bool aAddToGlobalHistory, bool aCloneSHChildren);
 
+ public:
   // Helper method that is called when a new document (including any
   // sub-documents - ie. frames) has been completely loaded.
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
@@ -997,7 +1002,7 @@ class nsDocShell final : public nsDocLoader,
   bool ShouldDiscardLayoutState(nsIHttpChannel* aChannel);
   bool HasUnloadedParent();
   bool JustStartedNetworkLoad();
-  bool IsPrintingOrPP(bool aDisplayErrorDialog = true);
+  bool NavigationBlockedByPrinting(bool aDisplayErrorDialog = true);
   bool IsNavigationAllowed(bool aDisplayPrintErrorDialog = true,
                            bool aCheckIfUnloadFired = true);
   nsIScrollableFrame* GetRootScrollFrame();
@@ -1009,7 +1014,8 @@ class nsDocShell final : public nsDocLoader,
   nsresult EnsureCommandHandler();
   nsresult RefreshURIFromQueue();
   nsresult Embed(nsIContentViewer* aContentViewer,
-                 mozilla::dom::WindowGlobalChild* aWindowActor = nullptr);
+                 mozilla::dom::WindowGlobalChild* aWindowActor = nullptr,
+                 bool aIsTransientAboutBlank = false);
   nsPresContext* GetEldestPresContext();
   nsresult CheckLoadingPermissions();
   nsresult LoadHistoryEntry(nsISHEntry* aEntry, uint32_t aLoadType);
@@ -1101,7 +1107,6 @@ class nsDocShell final : public nsDocLoader,
   void MoveLoadingToActiveEntry(bool aCommit);
 
  private:  // data members
-  nsID mHistoryID;
   nsString mTitle;
   nsCString mOriginalUriString;
   nsTObserverArray<nsWeakPtr> mPrivacyObservers;
@@ -1252,6 +1257,7 @@ class nsDocShell final : public nsDocLoader,
   bool mCreatingDocument;  // (should be) debugging only
 #ifdef DEBUG
   bool mInEnsureScriptEnv;
+  uint64_t mDocShellID = 0;
 #endif
 
   bool mInitialized : 1;
@@ -1292,9 +1298,6 @@ class nsDocShell final : public nsDocLoader,
   bool mIsBeingDestroyed : 1;
 
   bool mIsExecutingOnLoadHandler : 1;
-
-  // Indicates that a DocShell in this "docshell tree" is printing
-  bool mIsPrintingOrPP : 1;
 
   // Indicates to CreateContentViewer() that it is safe to cache the old
   // presentation of the page, and to SetupNewViewer() that the old viewer

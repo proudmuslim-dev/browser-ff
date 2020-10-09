@@ -1393,7 +1393,7 @@ nsresult nsWebBrowserPersist::SaveURIInternal(
             do_QueryInterface(httpChannel));
         NS_ASSERTION(uploadChannel, "http must support nsIUploadChannel");
         // Attach the postdata to the http channel
-        uploadChannel->SetUploadStream(aPostData, EmptyCString(), -1);
+        uploadChannel->SetUploadStream(aPostData, ""_ns, -1);
       }
     }
 
@@ -1512,7 +1512,7 @@ nsresult nsWebBrowserPersist::GetExtensionForContentType(
   nsAutoCString contentType;
   LossyCopyUTF16toASCII(MakeStringSpan(aContentType), contentType);
   nsAutoCString ext;
-  rv = mMIMEService->GetPrimaryExtension(contentType, EmptyCString(), ext);
+  rv = mMIMEService->GetPrimaryExtension(contentType, ""_ns, ext);
   if (NS_SUCCEEDED(rv)) {
     *aExt = UTF8ToNewUnicode(ext);
     NS_ENSURE_TRUE(*aExt, NS_ERROR_OUT_OF_MEMORY);
@@ -2147,7 +2147,7 @@ nsresult nsWebBrowserPersist::CalculateAndAppendFileExt(
   // Append the extension onto the file
   if (!contentType.IsEmpty()) {
     nsCOMPtr<nsIMIMEInfo> mimeInfo;
-    mMIMEService->GetFromTypeAndExtension(contentType, EmptyCString(),
+    mMIMEService->GetFromTypeAndExtension(contentType, ""_ns,
                                           getter_AddRefs(mimeInfo));
 
     nsCOMPtr<nsIFile> localFile;
@@ -2314,18 +2314,22 @@ void nsWebBrowserPersist::FinishDownload() {
 void nsWebBrowserPersist::EndDownload(nsresult aResult) {
   MOZ_ASSERT(NS_IsMainThread(), "Should end download on the main thread.");
 
-  MOZ_DIAGNOSTIC_ASSERT(!mEndCalled, "Should only end the download once.");
   // Really this should just never happen, but if it does, at least avoid
   // no-op notifications or pretending we succeeded if we already failed.
   if (mEndCalled && (NS_SUCCEEDED(aResult) || mPersistResult == aResult)) {
     return;
   }
-  mEndCalled = true;
 
   // Store the error code in the result if it is an error
   if (NS_SUCCEEDED(mPersistResult) && NS_FAILED(aResult)) {
     mPersistResult = aResult;
   }
+
+  if (mEndCalled) {
+    MOZ_ASSERT(!mEndCalled, "Should only end the download once.");
+    return;
+  }
+  mEndCalled = true;
 
   ClosePromise::All(GetCurrentSerialEventTarget(), mFileClosePromises)
       ->Then(GetCurrentSerialEventTarget(), __func__,
@@ -2503,9 +2507,7 @@ nsresult nsWebBrowserPersist::URIData::GetLocalURI(nsIURI* targetBaseURI,
   }
 
   // remove username/password if present
-  Unused << NS_MutateURI(fileAsURI)
-                .SetUserPass(EmptyCString())
-                .Finalize(fileAsURI);
+  Unused << NS_MutateURI(fileAsURI).SetUserPass(""_ns).Finalize(fileAsURI);
 
   // reset node attribute
   // Use relative or absolute links

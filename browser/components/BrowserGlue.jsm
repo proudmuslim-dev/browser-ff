@@ -312,8 +312,6 @@ let JSWINDOWACTORS = {
       events: {
         DOMWindowCreated: {},
         MozAfterPaint: {},
-        "MozDOMPointerLock:Entered": {},
-        "MozDOMPointerLock:Exited": {},
       },
     },
 
@@ -552,6 +550,22 @@ let JSWINDOWACTORS = {
       observers: ["decoder-doctor-notification"],
     },
 
+    allFrames: true,
+  },
+
+  PointerLock: {
+    parent: {
+      moduleURI: "resource:///actors/PointerLockParent.jsm",
+    },
+    child: {
+      moduleURI: "resource:///actors/PointerLockChild.jsm",
+      events: {
+        "MozDOMPointerLock:Entered": {},
+        "MozDOMPointerLock:Exited": {},
+      },
+    },
+
+    messageManagerGroups: ["browsers"],
     allFrames: true,
   },
 
@@ -806,7 +820,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   SearchTelemetry: "resource:///modules/SearchTelemetry.jsm",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.jsm",
   SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
-  ShellService: "resource:///modules/ShellService.jsm",
   TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
   TabUnloader: "resource:///modules/TabUnloader.jsm",
   TRRRacer: "resource:///modules/TRRPerformance.jsm",
@@ -1862,6 +1875,8 @@ BrowserGlue.prototype = {
 
     PageActions.init();
 
+    DoHController.init();
+
     this._firstWindowTelemetry(aWindow);
     this._firstWindowLoaded();
 
@@ -2193,14 +2208,14 @@ BrowserGlue.prototype = {
     _checkHTTPSOnlyPBMPref();
   },
 
-  _monitorPioneerPref() {
-    const PREF_PIONEER_ID = "toolkit.telemetry.pioneerId";
+  _monitorIonPref() {
+    const PREF_ION_ID = "toolkit.telemetry.pioneerId";
 
-    const _checkPioneerPref = async () => {
+    const _checkIonPref = async () => {
       for (let win of Services.wm.getEnumerator("navigator:browser")) {
         win.document.getElementById(
-          "pioneer-button"
-        ).hidden = !Services.prefs.getStringPref(PREF_PIONEER_ID, null);
+          "ion-button"
+        ).hidden = !Services.prefs.getStringPref(PREF_ION_ID, null);
       }
     };
 
@@ -2208,32 +2223,29 @@ BrowserGlue.prototype = {
       onOpenWindow(xulWindow) {
         const win = xulWindow.docShell.domWindow;
         win.addEventListener("load", () => {
-          const pioneerButton = win.document.getElementById("pioneer-button");
-          if (pioneerButton) {
-            pioneerButton.hidden = !Services.prefs.getStringPref(
-              PREF_PIONEER_ID,
-              null
-            );
+          const ionButton = win.document.getElementById("ion-button");
+          if (ionButton) {
+            ionButton.hidden = !Services.prefs.getStringPref(PREF_ION_ID, null);
           }
         });
       },
       onCloseWindow() {},
     };
 
-    Services.prefs.addObserver(PREF_PIONEER_ID, _checkPioneerPref);
+    Services.prefs.addObserver(PREF_ION_ID, _checkIonPref);
     Services.wm.addListener(windowListener);
-    _checkPioneerPref();
+    _checkIonPref();
   },
 
-  _monitorPioneerStudies() {
+  _monitorIonStudies() {
     const STUDY_ADDON_COLLECTION_KEY = "pioneer-study-addons-v1";
-    const PREF_PIONEER_NEW_STUDIES_AVAILABLE =
+    const PREF_ION_NEW_STUDIES_AVAILABLE =
       "toolkit.telemetry.pioneer-new-studies-available";
 
     const _badgeIcon = async () => {
       for (let win of Services.wm.getEnumerator("navigator:browser")) {
         win.document
-          .getElementById("pioneer-button")
+          .getElementById("ion-button")
           .querySelector(".toolbarbutton-badge")
           .classList.add("feature-callout");
       }
@@ -2243,14 +2255,11 @@ BrowserGlue.prototype = {
       onOpenWindow(xulWindow) {
         const win = xulWindow.docShell.domWindow;
         win.addEventListener("load", () => {
-          const pioneerButton = win.document.getElementById("pioneer-button");
-          if (pioneerButton) {
-            const badge = pioneerButton.querySelector(".toolbarbutton-badge");
+          const ionButton = win.document.getElementById("ion-button");
+          if (ionButton) {
+            const badge = ionButton.querySelector(".toolbarbutton-badge");
             if (
-              Services.prefs.getBoolPref(
-                PREF_PIONEER_NEW_STUDIES_AVAILABLE,
-                false
-              )
+              Services.prefs.getBoolPref(PREF_ION_NEW_STUDIES_AVAILABLE, false)
             ) {
               badge.classList.add("feature-callout");
             } else {
@@ -2263,15 +2272,15 @@ BrowserGlue.prototype = {
     };
 
     // Update all open windows if the pref changes.
-    Services.prefs.addObserver(PREF_PIONEER_NEW_STUDIES_AVAILABLE, _badgeIcon);
+    Services.prefs.addObserver(PREF_ION_NEW_STUDIES_AVAILABLE, _badgeIcon);
 
     // Badge any currently-open windows.
-    if (Services.prefs.getBoolPref(PREF_PIONEER_NEW_STUDIES_AVAILABLE, false)) {
+    if (Services.prefs.getBoolPref(PREF_ION_NEW_STUDIES_AVAILABLE, false)) {
       _badgeIcon();
     }
 
     RemoteSettings(STUDY_ADDON_COLLECTION_KEY).on("sync", async event => {
-      Services.prefs.setBoolPref(PREF_PIONEER_NEW_STUDIES_AVAILABLE, true);
+      Services.prefs.setBoolPref(PREF_ION_NEW_STUDIES_AVAILABLE, true);
     });
 
     // When a new window opens, check if we need to badge the icon.
@@ -2368,8 +2377,8 @@ BrowserGlue.prototype = {
     this._monitorScreenshotsPref();
     this._monitorWebcompatReporterPref();
     this._monitorHTTPSOnlyPref();
-    this._monitorPioneerPref();
-    this._monitorPioneerStudies();
+    this._monitorIonPref();
+    this._monitorIonStudies();
 
     let pService = Cc["@mozilla.org/toolkit/profile-service;1"].getService(
       Ci.nsIToolkitProfileService
@@ -2378,7 +2387,6 @@ BrowserGlue.prototype = {
       this._showNewInstallModal();
     }
 
-    DoHController.init();
     FirefoxMonitor.init();
   },
 
@@ -2567,7 +2575,7 @@ BrowserGlue.prototype = {
       },
 
       // request startup of Chromium remote debugging protocol
-      // (observer will only be notified when --remote-debugger is passed)
+      // (observer will only be notified when --remote-debugging-port is passed)
       {
         condition: AppConstants.ENABLE_REMOTE_AGENT,
         task: () => {
@@ -3244,7 +3252,7 @@ BrowserGlue.prototype = {
   _migrateUI: function BG__migrateUI() {
     // Use an increasing number to keep track of the current migration state.
     // Completely unrelated to the current Firefox release number.
-    const UI_VERSION = 97;
+    const UI_VERSION = 98;
     const BROWSER_DOCURL = AppConstants.BROWSER_CHROME_URL;
 
     if (!Services.prefs.prefHasUserValue("browser.migration.version")) {
@@ -3872,6 +3880,10 @@ BrowserGlue.prototype = {
       }
     }
 
+    if (currentUIVersion < 98) {
+      Services.prefs.clearUserPref("browser.search.cohort");
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
   },
@@ -3884,9 +3896,11 @@ BrowserGlue.prototype = {
           {}
         );
         if (willPrompt) {
-          // Prevent the related notification from appearing if we're
-          // showing the modal prompt.
+          // Prevent the related notification from appearing and
+          // show the modal prompt.
           DefaultBrowserNotification.notifyModalDisplayed();
+          let win = BrowserWindowTracker.getTopWindow();
+          DefaultBrowserCheck.prompt(win);
         }
       }
     );
@@ -4709,9 +4723,9 @@ var DefaultBrowserCheck = {
       shouldAsk
     );
     if (rv == 0) {
-      ShellService.setAsDefault();
+      win.getShellService().setAsDefault();
     } else if (!shouldAsk.value) {
-      ShellService.shouldCheckDefaultBrowser = false;
+      win.getShellService().shouldCheckDefaultBrowser = false;
     }
 
     try {
@@ -4731,14 +4745,17 @@ var DefaultBrowserCheck = {
    * @returns {boolean} True if the default browser check prompt will be shown.
    */
   async willCheckDefaultBrowser(isStartupCheck) {
+    let win = BrowserWindowTracker.getTopWindow();
+    let shellService = win.getShellService();
+
     // Perform default browser checking.
-    if (!ShellService) {
+    if (!shellService) {
       return false;
     }
 
     let shouldCheck =
       !AppConstants.DEBUG &&
-      ShellService.shouldCheckDefaultBrowser &&
+      shellService.shouldCheckDefaultBrowser &&
       !Services.prefs.getBoolPref(
         "browser.defaultbrowser.notificationbar",
         false
@@ -4775,7 +4792,7 @@ var DefaultBrowserCheck = {
     let isDefault = false;
     let isDefaultError = false;
     try {
-      isDefault = ShellService.isDefaultBrowser(isStartupCheck, false);
+      isDefault = shellService.isDefaultBrowser(isStartupCheck, false);
     } catch (ex) {
       isDefaultError = true;
     }

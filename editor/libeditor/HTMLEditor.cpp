@@ -1805,11 +1805,8 @@ EditorDOMPoint HTMLEditor::InsertNodeIntoProperAncestorWithTransaction(
     if (!pointToInsert.IsInContentNode() ||
         !EditorUtils::IsEditableContent(*pointToInsert.ContainerAsContent(),
                                         EditorType::HTML)) {
-      // There's no suitable place to put the node in this editing host.  Maybe
-      // someone is trying to put block content in a span.  So just put it
-      // where we were originally asked.
-      pointToInsert = aPointToInsert;
-      break;
+      // There's no suitable place to put the node in this editing host.
+      return EditorDOMPoint();
     }
   }
 
@@ -1938,7 +1935,7 @@ nsresult HTMLEditor::SetParagraphFormatAsAction(
   MOZ_ASSERT(tagName);
   if (tagName == nsGkAtoms::dd || tagName == nsGkAtoms::dt) {
     EditActionResult result = MakeOrChangeListAndListItemAsSubAction(
-        *tagName, EmptyString(), SelectAllOfCurrentList::No);
+        *tagName, u""_ns, SelectAllOfCurrentList::No);
     NS_WARNING_ASSERTION(result.Succeeded(),
                          "HTMLEditor::MakeOrChangeListAndListItemAsSubAction("
                          "SelectAllOfCurrentList::No) failed");
@@ -2832,7 +2829,7 @@ already_AddRefed<Element> HTMLEditor::CreateElementWithDefaults(
   // Mark the new element dirty, so it will be formatted
   // XXX Don't we need to check the error result of setting _moz_dirty attr?
   IgnoredErrorResult ignoredError;
-  newElement->SetAttribute(u"_moz_dirty"_ns, EmptyString(), ignoredError);
+  newElement->SetAttribute(u"_moz_dirty"_ns, u""_ns, ignoredError);
   NS_WARNING_ASSERTION(!ignoredError.Failed(),
                        "Element::SetAttribute(_moz_dirty) failed, but ignored");
   ignoredError.SuppressException();
@@ -3822,7 +3819,7 @@ nsresult HTMLEditor::SelectAllInternal() {
     return NS_ERROR_FAILURE;
   }
 
-  nsIContent* anchorContent = anchorNode->AsContent();
+  nsCOMPtr<nsIContent> anchorContent = anchorNode->AsContent();
   nsIContent* rootContent;
   if (anchorContent->HasIndependentSelection()) {
     SelectionRefPtr()->SetAncestorLimiter(nullptr);
@@ -6283,7 +6280,25 @@ nsresult HTMLEditor::GetPreferredIMEState(IMEState* aState) {
 
 already_AddRefed<Element> HTMLEditor::GetInputEventTargetElement() const {
   RefPtr<Element> target = GetActiveEditingHost();
-  return target.forget();
+  if (target) {
+    return target.forget();
+  }
+
+  // When there is no active editing host due to focus node is a
+  // non-editable node, we should look for its editable parent to
+  // dispatch `beforeinput` event.
+  nsIContent* focusContent =
+      nsIContent::FromNodeOrNull(SelectionRefPtr()->GetFocusNode());
+  if (!focusContent || focusContent->IsEditable()) {
+    return nullptr;
+  }
+  for (Element* element : focusContent->AncestorsOfType<Element>()) {
+    if (element->IsEditable()) {
+      target = element->GetEditingHost();
+      return target.forget();
+    }
+  }
+  return nullptr;
 }
 
 Element* HTMLEditor::GetEditorRoot() const { return GetActiveEditingHost(); }

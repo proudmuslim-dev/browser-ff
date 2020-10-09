@@ -29,6 +29,7 @@
 #include "vm/ErrorReporting.h"
 #include "vm/MallocProvider.h"
 #include "vm/Runtime.h"
+#include "vm/SharedStencil.h"  // js::SharedImmutableScriptDataTable
 
 struct JS_PUBLIC_API JSContext;
 
@@ -382,7 +383,8 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   js::SymbolRegistry& symbolRegistry() { return runtime_->symbolRegistry(); }
 
   // Methods to access runtime data that must be protected by locks.
-  js::RuntimeScriptDataTable& scriptDataTable(js::AutoLockScriptData& lock) {
+  js::SharedImmutableScriptDataTable& scriptDataTable(
+      js::AutoLockScriptData& lock) {
     return runtime_->scriptDataTable(lock);
   }
 
@@ -411,10 +413,6 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   friend class js::jit::DebugModeOSRVolatileJitFrameIter;
   friend void js::ReportOverRecursed(JSContext*, unsigned errorNumber);
 
- private:
-  static JS::Error reportedError;
-  static JS::OOM reportedOOM;
-
  public:
   inline JS::Result<> boolToResult(bool ok);
 
@@ -432,8 +430,8 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
     return result.isOk() ? result.unwrap() : nullptr;
   }
 
-  mozilla::GenericErrorResult<JS::OOM&> alreadyReportedOOM();
-  mozilla::GenericErrorResult<JS::Error&> alreadyReportedError();
+  mozilla::GenericErrorResult<JS::OOM> alreadyReportedOOM();
+  mozilla::GenericErrorResult<JS::Error> alreadyReportedError();
 
   /*
    * Points to the most recent JitActivation pushed on the thread.
@@ -1007,7 +1005,7 @@ inline JS::Result<> JSContext::boolToResult(bool ok) {
     MOZ_ASSERT(!isPropagatingForcedReturn());
     return JS::Ok();
   }
-  return JS::Result<>(reportedError);
+  return JS::Result<>(JS::Error());
 }
 
 inline JSContext* JSRuntime::mainContextFromOwnThread() {
@@ -1308,7 +1306,7 @@ class MOZ_RAII AutoSuppressNurseryCellAlloc {
 } /* namespace js */
 
 #define CHECK_THREAD(cx)                            \
-  MOZ_ASSERT_IF(cx && !cx->isHelperThreadContext(), \
-                js::CurrentThreadCanAccessRuntime(cx->runtime()))
+  MOZ_ASSERT_IF(cx, !cx->isHelperThreadContext() && \
+                        js::CurrentThreadCanAccessRuntime(cx->runtime()))
 
 #endif /* vm_JSContext_h */

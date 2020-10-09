@@ -84,8 +84,9 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph,
     frameDepth_ += gen->wasmMaxStackArgBytes();
 
 #ifdef ENABLE_WASM_SIMD
-#  if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86)
-    // On X64 and x86, we don't need alignment for Wasm SIMD at this time.
+#  if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86) || \
+      defined(JS_CODEGEN_ARM64)
+    // On X64/x86 and ARM64, we don't need alignment for Wasm SIMD at this time.
 #  else
 #    error \
         "we may need padding so that local slots are SIMD-aligned and the stack must be kept SIMD-aligned too."
@@ -921,37 +922,27 @@ OutOfLineCode* CodeGeneratorShared::oolTruncateDouble(
 }
 
 void CodeGeneratorShared::emitTruncateDouble(FloatRegister src, Register dest,
-                                             MTruncateToInt32* mir) {
-  OutOfLineCode* ool = oolTruncateDouble(src, dest, mir, mir->bytecodeOffset());
-
-  masm.branchTruncateDoubleMaybeModUint32(src, dest, ool->entry());
-  masm.bind(ool->rejoin());
-}
-
-void CodeGeneratorShared::emitTruncateDoubleBuiltin(
-    FloatRegister src, Register dest, MWasmBuiltinTruncateToInt32* mir) {
-  OutOfLineCode* ool = oolTruncateDouble(src, dest, mir, mir->bytecodeOffset(),
-                                         /* preserveTls */ true);
+                                             MInstruction* mir) {
+  MOZ_ASSERT(mir->isTruncateToInt32() || mir->isWasmBuiltinTruncateToInt32());
+  wasm::BytecodeOffset bytecodeOffset =
+      mir->isTruncateToInt32()
+          ? mir->toTruncateToInt32()->bytecodeOffset()
+          : mir->toWasmBuiltinTruncateToInt32()->bytecodeOffset();
+  OutOfLineCode* ool = oolTruncateDouble(src, dest, mir, bytecodeOffset);
 
   masm.branchTruncateDoubleMaybeModUint32(src, dest, ool->entry());
   masm.bind(ool->rejoin());
 }
 
 void CodeGeneratorShared::emitTruncateFloat32(FloatRegister src, Register dest,
-                                              MTruncateToInt32* mir) {
-  OutOfLineTruncateSlow* ool = new (alloc()) OutOfLineTruncateSlow(
-      src, dest, /* float32 */ true, mir->bytecodeOffset());
-  addOutOfLineCode(ool, mir);
-
-  masm.branchTruncateFloat32MaybeModUint32(src, dest, ool->entry());
-  masm.bind(ool->rejoin());
-}
-
-void CodeGeneratorShared::emitTruncateFloat32Builtin(
-    FloatRegister src, Register dest, MWasmBuiltinTruncateToInt32* mir) {
+                                              MInstruction* mir) {
+  MOZ_ASSERT(mir->isTruncateToInt32() || mir->isWasmBuiltinTruncateToInt32());
+  wasm::BytecodeOffset bytecodeOffset =
+      mir->isTruncateToInt32()
+          ? mir->toTruncateToInt32()->bytecodeOffset()
+          : mir->toWasmBuiltinTruncateToInt32()->bytecodeOffset();
   OutOfLineTruncateSlow* ool = new (alloc())
-      OutOfLineTruncateSlow(src, dest, /* float32 */ true,
-                            mir->bytecodeOffset(), /* preserveTls */ true);
+      OutOfLineTruncateSlow(src, dest, /* float32 */ true, bytecodeOffset);
   addOutOfLineCode(ool, mir);
 
   masm.branchTruncateFloat32MaybeModUint32(src, dest, ool->entry());
@@ -963,24 +954,10 @@ void CodeGeneratorShared::visitOutOfLineTruncateSlow(
   FloatRegister src = ool->src();
   Register dest = ool->dest();
 
-  if (ool->preserveTls()) {
-    masm.Push(WasmTlsReg);
-  }
-  int32_t framePushedAfterTls = masm.framePushed();
-
   saveVolatile(dest);
-  mozilla::Maybe<int32_t> tlsOffset =
-      ool->preserveTls()
-          ? mozilla::Some(masm.framePushed() - framePushedAfterTls)
-          : mozilla::Nothing();
   masm.outOfLineTruncateSlow(src, dest, ool->widenFloatToDouble(),
-                             gen->compilingWasm(), ool->bytecodeOffset(),
-                             tlsOffset);
+                             gen->compilingWasm(), ool->bytecodeOffset());
   restoreVolatile(dest);
-
-  if (ool->preserveTls()) {
-    masm.Pop(WasmTlsReg);
-  }
 
   masm.jump(ool->rejoin());
 }

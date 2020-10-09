@@ -19,7 +19,6 @@
 #include "jit/MIRGraph.h"
 #include "jit/Safepoints.h"
 #include "jit/Snapshots.h"
-#include "jit/VMFunctions.h"
 
 namespace js {
 namespace jit {
@@ -281,14 +280,8 @@ class CodeGeneratorShared : public LElementVisitor {
       FloatRegister src, Register dest, MInstruction* mir,
       wasm::BytecodeOffset callOffset = wasm::BytecodeOffset(),
       bool preserveTls = false);
-  void emitTruncateDouble(FloatRegister src, Register dest,
-                          MTruncateToInt32* mir);
-  void emitTruncateDoubleBuiltin(FloatRegister src, Register dest,
-                                 MWasmBuiltinTruncateToInt32* mir);
-  void emitTruncateFloat32(FloatRegister src, Register dest,
-                           MTruncateToInt32* mir);
-  void emitTruncateFloat32Builtin(FloatRegister src, Register dest,
-                                  MWasmBuiltinTruncateToInt32* mir);
+  void emitTruncateDouble(FloatRegister src, Register dest, MInstruction* mir);
+  void emitTruncateFloat32(FloatRegister src, Register dest, MInstruction* mir);
 
   void emitPreBarrier(Register elements, const LAllocation* index);
   void emitPreBarrier(Address address);

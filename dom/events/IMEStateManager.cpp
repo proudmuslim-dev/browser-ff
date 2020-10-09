@@ -651,8 +651,8 @@ bool IMEStateManager::OnMouseButtonEventInEditor(
     return false;
   }
 
-  bool consumed =
-      sActiveIMEContentObserver->OnMouseButtonEvent(aPresContext, aMouseEvent);
+  RefPtr<IMEContentObserver> observer = sActiveIMEContentObserver;
+  bool consumed = observer->OnMouseButtonEvent(aPresContext, aMouseEvent);
 
   if (MOZ_LOG_TEST(sISMLog, LogLevel::Info)) {
     nsAutoString eventType;
@@ -877,6 +877,10 @@ void IMEStateManager::UpdateIMEState(const IMEState& aNewIMEState,
   MOZ_ASSERT(!sPresContext->GetTextInputHandlingWidget() ||
              sPresContext->GetTextInputHandlingWidget() == widget);
 
+  // TODO: Investigate if we could put off to initialize IMEContentObserver
+  //       later because a lot of callers need to be marked as
+  //       MOZ_CAN_RUN_SCRIPT otherwise.
+
   // Even if there is active IMEContentObserver, it may not be observing the
   // editor with current editable root content due to reframed.  In such case,
   // We should try to reinitialize the IMEContentObserver.
@@ -885,7 +889,8 @@ void IMEStateManager::UpdateIMEState(const IMEState& aNewIMEState,
             ("  UpdateIMEState(), try to reinitialize the "
              "active IMEContentObserver"));
     RefPtr<IMEContentObserver> contentObserver = sActiveIMEContentObserver;
-    if (!contentObserver->MaybeReinitialize(widget, sPresContext, aContent,
+    RefPtr<nsPresContext> presContext = sPresContext;
+    if (!contentObserver->MaybeReinitialize(widget, presContext, aContent,
                                             aEditorBase)) {
       MOZ_LOG(sISMLog, LogLevel::Error,
               ("  UpdateIMEState(), failed to reinitialize the "
@@ -1260,7 +1265,13 @@ void IMEStateManager::SetIMEState(const IMEState& aState,
     }
 
     if (aContent->IsHTMLElement(nsGkAtoms::input)) {
-      HTMLInputElement::FromNode(aContent)->GetType(context.mHTMLInputType);
+      HTMLInputElement* inputElement = HTMLInputElement::FromNode(aContent);
+      if (inputElement->HasBeenTypePassword() && aState.IsEditable()) {
+        context.mHTMLInputType.AssignLiteral("password");
+      } else {
+        inputElement->GetType(context.mHTMLInputType);
+      }
+
       GetActionHint(*aContent, context.mActionHint);
     } else if (aContent->IsHTMLElement(nsGkAtoms::textarea)) {
       context.mHTMLInputType.Assign(nsGkAtoms::textarea->GetUTF16String());
@@ -1282,6 +1293,13 @@ void IMEStateManager::SetIMEState(const IMEState& aState,
         // Except to mozAwesomebar, inputmode should be lower case.
         ToLowerCase(context.mHTMLInputInputmode);
       }
+    }
+
+    if (aContent->IsHTMLElement() && aState.IsEditable() &&
+        StaticPrefs::dom_forms_autocapitalize() &&
+        context.IsAutocapitalizeSupported()) {
+      nsGenericHTMLElement::FromNode(aContent)->GetAutocapitalize(
+          context.mAutocapitalize);
     }
   }
 
@@ -1842,7 +1860,9 @@ void IMEStateManager::CreateIMEContentObserver(EditorBase* aEditorBase) {
   // We should hold the current instance here.
   RefPtr<IMEContentObserver> activeIMEContentObserver(
       sActiveIMEContentObserver);
-  activeIMEContentObserver->Init(widget, sPresContext, sContent, aEditorBase);
+  RefPtr<nsPresContext> presContext = sPresContext;
+  RefPtr<nsIContent> content = sContent;
+  activeIMEContentObserver->Init(widget, presContext, content, aEditorBase);
 }
 
 // static

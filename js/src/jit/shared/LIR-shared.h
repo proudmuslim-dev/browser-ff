@@ -222,22 +222,6 @@ class LNurseryObject : public LInstructionHelper<1, 0, 0> {
   MNurseryObject* mir() const { return mir_->toNurseryObject(); }
 };
 
-// Clone an object literal such as we are not modifying the object contained in
-// the sources.
-class LCloneLiteral : public LCallInstructionHelper<1, 1, 0> {
- public:
-  LIR_HEADER(CloneLiteral)
-
-  explicit LCloneLiteral(const LAllocation& obj)
-      : LCallInstructionHelper(classOpcode) {
-    setOperand(0, obj);
-  }
-
-  const LAllocation* getObjectLiteral() { return getOperand(0); }
-
-  MCloneLiteral* mir() const { return mir_->toCloneLiteral(); }
-};
-
 // Formal argument for a function, returning a box. Formal arguments are
 // initially read from the stack.
 class LParameter : public LInstructionHelper<BOX_PIECES, 0, 0> {
@@ -941,6 +925,23 @@ class LArgumentsObjectLength : public LInstructionHelper<1, 1, 0> {
   }
 
   const LAllocation* getArgsObject() { return getOperand(0); }
+};
+
+// Guard that the arguments object has no overridden iterator.
+class LGuardArgumentsObjectNotOverriddenIterator
+    : public LInstructionHelper<0, 1, 1> {
+ public:
+  LIR_HEADER(GuardArgumentsObjectNotOverriddenIterator)
+
+  explicit LGuardArgumentsObjectNotOverriddenIterator(
+      const LAllocation& argsObj, const LDefinition& temp)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, argsObj);
+    setTemp(0, temp);
+  }
+
+  const LAllocation* getArgsObject() { return getOperand(0); }
+  const LDefinition* temp() { return this->getTemp(0); }
 };
 
 // If the Value is an Object, return unbox(Value).
@@ -3155,8 +3156,8 @@ class LTruncateDToInt32 : public LInstructionHelper<1, 1, 1> {
   MTruncateToInt32* mir() const { return mir_->toTruncateToInt32(); }
 };
 
-// Convert a double to a truncated int32, carrying the tls value because we need
-// it for the slow ool path.
+// Convert a double to a truncated int32 with tls offset because we need it for
+// the slow ool path.
 class LWasmBuiltinTruncateDToInt32 : public LInstructionHelper<1, 2, 1> {
  public:
   LIR_HEADER(WasmBuiltinTruncateDToInt32)
@@ -3194,8 +3195,8 @@ class LTruncateFToInt32 : public LInstructionHelper<1, 1, 1> {
   MTruncateToInt32* mir() const { return mir_->toTruncateToInt32(); }
 };
 
-// Convert a float32 to a truncated int32, carrying the tls value because we
-// need it for the slow ool path.
+// Convert a float32 to a truncated int32 with tls offset because we need it for
+// the slow ool path.
 class LWasmBuiltinTruncateFToInt32 : public LInstructionHelper<1, 2, 1> {
  public:
   LIR_HEADER(WasmBuiltinTruncateFToInt32)
@@ -3937,6 +3938,19 @@ class LFunctionLength : public LInstructionHelper<1, 1, 0> {
   LIR_HEADER(FunctionLength)
 
   explicit LFunctionLength(const LAllocation& function)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, function);
+  }
+
+  const LAllocation* function() { return getOperand(0); }
+};
+
+// Load the "name" property of a function.
+class LFunctionName : public LInstructionHelper<1, 1, 0> {
+ public:
+  LIR_HEADER(FunctionName)
+
+  explicit LFunctionName(const LAllocation& function)
       : LInstructionHelper(classOpcode) {
     setOperand(0, function);
   }
@@ -6647,6 +6661,20 @@ class LGuardIsNotArrayBufferMaybeShared : public LInstructionHelper<0, 1, 1> {
   const LDefinition* temp() { return getTemp(0); }
 };
 
+class LGuardIsTypedArray : public LInstructionHelper<0, 1, 1> {
+ public:
+  LIR_HEADER(GuardIsTypedArray)
+
+  LGuardIsTypedArray(const LAllocation& obj, const LDefinition& temp)
+      : LInstructionHelper(classOpcode) {
+    setOperand(0, obj);
+    setTemp(0, temp);
+  }
+
+  const LAllocation* object() { return getOperand(0); }
+  const LDefinition* temp() { return getTemp(0); }
+};
+
 class LGuardObjectGroup : public LInstructionHelper<1, 1, 1> {
  public:
   LIR_HEADER(GuardObjectGroup)
@@ -8353,6 +8381,25 @@ class LLoadWrapperTarget : public LInstructionHelper<1, 1, 0> {
   }
 
   const LAllocation* object() { return getOperand(0); }
+};
+
+class LGuardHasGetterSetter : public LCallInstructionHelper<0, 1, 2> {
+ public:
+  LIR_HEADER(GuardHasGetterSetter)
+
+  LGuardHasGetterSetter(const LAllocation& object, const LDefinition& temp1,
+                        const LDefinition& temp2)
+      : LCallInstructionHelper(classOpcode) {
+    setOperand(0, object);
+    setTemp(0, temp1);
+    setTemp(1, temp2);
+  }
+
+  const LAllocation* object() { return getOperand(0); }
+  const LDefinition* temp1() { return getTemp(0); }
+  const LDefinition* temp2() { return getTemp(1); }
+
+  MGuardHasGetterSetter* mir() const { return mir_->toGuardHasGetterSetter(); }
 };
 
 template <size_t NumDefs>

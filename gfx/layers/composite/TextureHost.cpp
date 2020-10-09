@@ -511,6 +511,10 @@ void TextureHost::EnsureRenderTexture(
         Some(AsyncImagePipelineManager::GetNextExternalImageId());
   } else {
     // TextureHost is wrapped by WebRenderTextureHost.
+    if (aExternalImageId == mExternalImageId) {
+      // The texture has already been created.
+      return;
+    }
     MOZ_ASSERT(mExternalImageId.isNothing());
     mExternalImageId = aExternalImageId;
   }
@@ -523,7 +527,7 @@ void TextureHost::PrintInfo(std::stringstream& aStream, const char* aPrefix) {
   // Note: the TextureHost needs to be locked before it is safe to call
   //       GetSize() and GetFormat() on it.
   if (Lock()) {
-    AppendToString(aStream, GetSize(), " [size=", "]");
+    aStream << " [size=" << GetSize() << "]";
     AppendToString(aStream, GetFormat(), " [format=", "]");
     Unlock();
   }

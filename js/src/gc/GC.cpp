@@ -227,6 +227,8 @@
 #include "jit/JitCode.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitRealm.h"
+#include "jit/JitRuntime.h"
+#include "jit/JitZone.h"
 #include "js/Object.h"  // JS::GetClass
 #include "js/SliceBudget.h"
 #include "proxy/DeadObjectProxy.h"
@@ -1399,9 +1401,7 @@ bool GCRuntime::setParameter(JSGCParamKey key, uint32_t value,
       if (!tunables.setParameter(key, value, lock)) {
         return false;
       }
-      for (ZonesIter zone(this, WithAtoms); !zone.done(); zone.next()) {
-        zone->updateGCStartThresholds(*this, GC_NORMAL, lock);
-      }
+      updateAllGCStartThresholds(lock);
   }
 
   return true;
@@ -1448,9 +1448,7 @@ void GCRuntime::resetParameter(JSGCParamKey key, AutoLockGC& lock) {
       break;
     default:
       tunables.resetParameter(key, lock);
-      for (ZonesIter zone(this, WithAtoms); !zone.done(); zone.next()) {
-        zone->updateGCStartThresholds(*this, GC_NORMAL, lock);
-      }
+      updateAllGCStartThresholds(lock);
   }
 }
 
@@ -1741,7 +1739,7 @@ bool GCRuntime::addRoot(Value* vp, const char* name) {
    * cases.
    */
   if (isIncrementalGCInProgress()) {
-    GCPtrValue::writeBarrierPre(*vp);
+    GCPtrValue::preWriteBarrier(*vp);
   }
 
   return rootsHash.ref().put(vp, name);
@@ -2206,6 +2204,14 @@ bool MovingTracer::onRegExpSharedEdge(RegExpShared** sharedp) {
 bool MovingTracer::onBigIntEdge(BigInt** bip) { return updateEdge(bip); }
 bool MovingTracer::onObjectGroupEdge(ObjectGroup** groupp) {
   return updateEdge(groupp);
+}
+bool MovingTracer::onSymbolEdge(JS::Symbol** symp) {
+  MOZ_ASSERT(!(*symp)->isForwarded());
+  return true;
+}
+bool MovingTracer::onJitCodeEdge(jit::JitCode** jitp) {
+  MOZ_ASSERT(!(*jitp)->isForwarded());
+  return true;
 }
 
 void Zone::prepareForCompacting() {
@@ -3053,7 +3059,7 @@ bool GCRuntime::triggerGC(JS::GCReason reason) {
   return true;
 }
 
-void GCRuntime::maybeAllocTriggerZoneGC(Zone* zone) {
+void GCRuntime::maybeTriggerGCAfterAlloc(Zone* zone) {
   if (!CurrentThreadCanAccessRuntime(rt)) {
     // Zones in use by a helper thread can't be collected.
     MOZ_ASSERT(zone->usedByHelperThread() || zone->isAtomsZone());
@@ -3065,50 +3071,41 @@ void GCRuntime::maybeAllocTriggerZoneGC(Zone* zone) {
   TriggerResult trigger =
       checkHeapThreshold(zone, zone->gcHeapSize, zone->gcHeapThreshold);
 
-  if (trigger.kind == TriggerKind::None) {
-    return;
-  }
-
-  if (trigger.kind == TriggerKind::NonIncremental) {
+  if (trigger.shouldTrigger) {
+    // Start or continue an in progress incremental GC. We do this to try to
+    // avoid performing non-incremental GCs on zones which allocate a lot of
+    // data, even when incremental slices can't be triggered via scheduling in
+    // the event loop.
     triggerZoneGC(zone, JS::GCReason::ALLOC_TRIGGER, trigger.usedBytes,
                   trigger.thresholdBytes);
-    return;
   }
-
-  MOZ_ASSERT(trigger.kind == TriggerKind::Incremental);
-
-  // Start or continue an in progress incremental GC. We do this to try to avoid
-  // performing non-incremental GCs on zones which allocate a lot of data, even
-  // when incremental slices can't be triggered via scheduling in the event
-  // loop.
-  triggerZoneGC(zone, JS::GCReason::INCREMENTAL_ALLOC_TRIGGER,
-                trigger.usedBytes, trigger.thresholdBytes);
 }
 
 void js::gc::MaybeMallocTriggerZoneGC(JSRuntime* rt, ZoneAllocator* zoneAlloc,
                                       const HeapSize& heap,
                                       const HeapThreshold& threshold,
                                       JS::GCReason reason) {
-  rt->gc.maybeMallocTriggerZoneGC(Zone::from(zoneAlloc), heap, threshold,
-                                  reason);
+  rt->gc.maybeTriggerGCAfterMalloc(Zone::from(zoneAlloc), heap, threshold,
+                                   reason);
 }
 
-void GCRuntime::maybeMallocTriggerZoneGC(Zone* zone) {
-  if (maybeMallocTriggerZoneGC(zone, zone->mallocHeapSize,
-                               zone->mallocHeapThreshold,
-                               JS::GCReason::TOO_MUCH_MALLOC)) {
+void GCRuntime::maybeTriggerGCAfterMalloc(Zone* zone) {
+  if (maybeTriggerGCAfterMalloc(zone, zone->mallocHeapSize,
+                                zone->mallocHeapThreshold,
+                                JS::GCReason::TOO_MUCH_MALLOC)) {
     return;
   }
 
-  maybeMallocTriggerZoneGC(zone, zone->jitHeapSize, zone->jitHeapThreshold,
-                           JS::GCReason::TOO_MUCH_JIT_CODE);
+  maybeTriggerGCAfterMalloc(zone, zone->jitHeapSize, zone->jitHeapThreshold,
+                            JS::GCReason::TOO_MUCH_JIT_CODE);
 }
 
-bool GCRuntime::maybeMallocTriggerZoneGC(Zone* zone, const HeapSize& heap,
-                                         const HeapThreshold& threshold,
-                                         JS::GCReason reason) {
+bool GCRuntime::maybeTriggerGCAfterMalloc(Zone* zone, const HeapSize& heap,
+                                          const HeapThreshold& threshold,
+                                          JS::GCReason reason) {
   if (!CurrentThreadCanAccessRuntime(rt)) {
-    // Zones in use by a helper thread can't be collected.
+    // Zones in use by a helper thread can't be collected. Also ignore malloc
+    // during sweeping, for example when we resize hash tables.
     MOZ_ASSERT(zone->usedByHelperThread() || zone->isAtomsZone() ||
                JS::RuntimeHeapIsBusy());
     return false;
@@ -3119,7 +3116,7 @@ bool GCRuntime::maybeMallocTriggerZoneGC(Zone* zone, const HeapSize& heap,
   }
 
   TriggerResult trigger = checkHeapThreshold(zone, heap, threshold);
-  if (trigger.kind == TriggerKind::None) {
+  if (!trigger.shouldTrigger) {
     return false;
   }
 
@@ -3136,27 +3133,23 @@ TriggerResult GCRuntime::checkHeapThreshold(
   size_t usedBytes = heapSize.bytes();
   size_t thresholdBytes = zone->wasGCStarted() ? heapThreshold.sliceBytes()
                                                : heapThreshold.startBytes();
-  if (usedBytes < thresholdBytes) {
-    return TriggerResult{TriggerKind::None, 0, 0};
-  }
-
   size_t niThreshold = heapThreshold.incrementalLimitBytes();
-  if (usedBytes >= niThreshold) {
-    // We have passed the non-incremental threshold: immediately trigger a
-    // non-incremental GC.
-    return TriggerResult{TriggerKind::NonIncremental, usedBytes, niThreshold};
+  MOZ_ASSERT(niThreshold >= thresholdBytes);
+
+  if (usedBytes < thresholdBytes) {
+    return TriggerResult{false, 0, 0};
   }
 
   // Don't trigger incremental slices during background sweeping or decommit, as
   // these will have no effect. A slice will be triggered automatically when
   // these tasks finish.
-  if (zone->wasGCStarted() &&
+  if (usedBytes < niThreshold && zone->wasGCStarted() &&
       (state() == State::Finalize || state() == State::Decommit)) {
-    return TriggerResult{TriggerKind::None, 0, 0};
+    return TriggerResult{false, 0, 0};
   }
 
   // Start or continue an in progress incremental GC.
-  return TriggerResult{TriggerKind::Incremental, usedBytes, thresholdBytes};
+  return TriggerResult{true, usedBytes, thresholdBytes};
 }
 
 bool GCRuntime::triggerZoneGC(Zone* zone, JS::GCReason reason, size_t used,
@@ -3838,16 +3831,15 @@ bool GCRuntime::shouldPreserveJITCode(Realm* realm,
 
 #ifdef DEBUG
 class CompartmentCheckTracer final : public JS::CallbackTracer {
-  bool onChild(const JS::GCCellPtr& thing) override;
+  void onChild(const JS::GCCellPtr& thing) override;
 
  public:
   explicit CompartmentCheckTracer(JSRuntime* rt)
-      : JS::CallbackTracer(rt),
+      : JS::CallbackTracer(rt, JS::TracerKind::Callback,
+                           JS::WeakEdgeTraceAction::Skip),
         src(nullptr),
         zone(nullptr),
-        compartment(nullptr) {
-    setTraceWeakEdges(false);
-  }
+        compartment(nullptr) {}
 
   Cell* src;
   JS::TraceKind srcKind;
@@ -3877,7 +3869,7 @@ static bool InCrossCompartmentMap(JSRuntime* rt, JSObject* src,
   return false;
 }
 
-bool CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing) {
+void CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing) {
   Compartment* comp =
       MapGCThingTyped(thing, [](auto t) { return t->maybeCompartment(); });
   if (comp && compartment) {
@@ -3890,7 +3882,6 @@ bool CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing) {
     Zone* thingZone = tenured->zoneFromAnyThread();
     MOZ_ASSERT(thingZone == zone || thingZone->isAtomsZone());
   }
-  return true;
 }
 
 void GCRuntime::checkForCompartmentMismatches() {
@@ -3910,7 +3901,7 @@ void GCRuntime::checkForCompartmentMismatches() {
         trc.srcKind = MapAllocToTraceKind(thingKind);
         trc.compartment = MapGCThingTyped(
             trc.src, trc.srcKind, [](auto t) { return t->maybeCompartment(); });
-        js::TraceChildren(&trc, trc.src, trc.srcKind);
+        JS::TraceChildren(&trc, JS::GCCellPtr(trc.src, trc.srcKind));
       }
     }
   }
@@ -6426,11 +6417,12 @@ void GCRuntime::finishCollection() {
 
   {
     AutoLockGC lock(this);
+
+    updateGCThresholdsAfterCollection(lock);
+
     for (GCZonesIter zone(this); !zone.done(); zone.next()) {
       zone->changeGCState(Zone::Finished, Zone::NoGC);
-      zone->clearGCSliceThresholds();
       zone->notifyObservingDebuggers();
-      zone->updateGCStartThresholds(*this, invocationKind, lock);
       zone->arenas.checkGCStateNotInUse();
     }
   }
@@ -6453,6 +6445,20 @@ void GCRuntime::finishCollection() {
 
   lastGCEndTime_ = currentTime;
 }
+
+void GCRuntime::updateGCThresholdsAfterCollection(const AutoLockGC& lock) {
+  for (GCZonesIter zone(this); !zone.done(); zone.next()) {
+    zone->clearGCSliceThresholds();
+    zone->updateGCStartThresholds(*this, invocationKind, lock);
+  }
+}
+
+void GCRuntime::updateAllGCStartThresholds(const AutoLockGC& lock) {
+  for (ZonesIter zone(this, WithAtoms); !zone.done(); zone.next()) {
+    zone->updateGCStartThresholds(*this, GC_NORMAL, lock);
+  }
+}
+
 
 static const char* GCHeapStateToLabel(JS::HeapState heapState) {
   switch (heapState) {
@@ -7663,8 +7669,8 @@ void GCRuntime::minorGC(JS::GCReason reason, gcstats::PhaseKind phase) {
   collectNursery(GC_NORMAL, reason, phase);
 
   for (ZonesIter zone(this, WithAtoms); !zone.done(); zone.next()) {
-    maybeAllocTriggerZoneGC(zone);
-    maybeMallocTriggerZoneGC(zone);
+    maybeTriggerGCAfterAlloc(zone);
+    maybeTriggerGCAfterMalloc(zone);
   }
 }
 
@@ -7890,8 +7896,8 @@ Realm* js::NewRealm(JSContext* cx, JSPrincipals* principals,
 void gc::MergeRealms(Realm* source, Realm* target) {
   JSRuntime* rt = source->runtimeFromMainThread();
   rt->gc.mergeRealms(source, target);
-  rt->gc.maybeAllocTriggerZoneGC(target->zone());
-  rt->gc.maybeMallocTriggerZoneGC(target->zone());
+  rt->gc.maybeTriggerGCAfterAlloc(target->zone());
+  rt->gc.maybeTriggerGCAfterMalloc(target->zone());
 }
 
 void GCRuntime::mergeRealms(Realm* source, Realm* target) {
@@ -8528,7 +8534,7 @@ JS_PUBLIC_API void JS::IncrementalPreWriteBarrier(JSObject* obj) {
   AutoGeckoProfilerEntry profilingStackFrame(
       TlsContext.get(), "IncrementalPreWriteBarrier(JSObject*)",
       JS::ProfilingCategoryPair::GCCC_Barrier);
-  JSObject::writeBarrierPre(obj);
+  PreWriteBarrier(obj);
 }
 
 JS_PUBLIC_API void JS::IncrementalPreWriteBarrier(GCCellPtr thing) {
@@ -8539,7 +8545,7 @@ JS_PUBLIC_API void JS::IncrementalPreWriteBarrier(GCCellPtr thing) {
   AutoGeckoProfilerEntry profilingStackFrame(
       TlsContext.get(), "IncrementalPreWriteBarrier(GCCellPtr)",
       JS::ProfilingCategoryPair::GCCC_Barrier);
-  TenuredCell::writeBarrierPre(&thing.asCell()->asTenured());
+  CellPtrPreWriteBarrier(thing);
 }
 
 JS_PUBLIC_API bool JS::WasIncrementalGC(JSRuntime* rt) {
@@ -8893,7 +8899,8 @@ extern JS_PUBLIC_API bool js::gc::detail::ObjectIsMarkedBlack(
 #endif
 
 js::gc::ClearEdgesTracer::ClearEdgesTracer(JSRuntime* rt)
-    : CallbackTracer(rt, TraceWeakMapKeysValues) {}
+    : GenericTracer(rt, JS::TracerKind::ClearEdges,
+                    JS::WeakMapTraceAction::TraceKeysAndValues) {}
 
 js::gc::ClearEdgesTracer::ClearEdgesTracer()
     : ClearEdgesTracer(TlsContext.get()->runtime()) {}
@@ -8939,10 +8946,6 @@ bool js::gc::ClearEdgesTracer::onScopeEdge(js::Scope** scopep) {
 bool js::gc::ClearEdgesTracer::onRegExpSharedEdge(js::RegExpShared** sharedp) {
   return clearEdge(sharedp);
 }
-bool js::gc::ClearEdgesTracer::onChild(const JS::GCCellPtr& thing) {
-  MOZ_CRASH();
-  return true;
-}
 
 JS_PUBLIC_API void js::gc::FinalizeDeadNurseryObject(JSContext* cx,
                                                      JSObject* obj) {
@@ -8985,5 +8988,5 @@ void GCRuntime::setPerformanceHint(PerformanceHint hint) {
   AutoLockGC lock(this);
   schedulingState.inPageLoad = inPageLoad;
   atomsZone->updateGCStartThresholds(*this, invocationKind, lock);
-  maybeAllocTriggerZoneGC(atomsZone);
+  maybeTriggerGCAfterAlloc(atomsZone);
 }

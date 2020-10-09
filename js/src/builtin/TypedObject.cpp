@@ -544,22 +544,12 @@ const JSFunctionSpec ArrayMetaTypeDescr::typeObjectMethods[] = {
      1,
      0,
      "TypeDescrEquivalent"},
-    JS_SELF_HOSTED_FN("build", "TypedObjectArrayTypeBuild", 3, 0),
-    JS_SELF_HOSTED_FN("from", "TypedObjectArrayTypeFrom", 3, 0),
     JS_FS_END};
 
 const JSPropertySpec ArrayMetaTypeDescr::typedObjectProperties[] = {JS_PS_END};
 
 const JSFunctionSpec ArrayMetaTypeDescr::typedObjectMethods[] = {
     {JSFunctionSpec::Name("forEach"), {nullptr, nullptr}, 1, 0, "ArrayForEach"},
-    {JSFunctionSpec::Name("redimension"),
-     {nullptr, nullptr},
-     1,
-     0,
-     "TypedObjectArrayRedimension"},
-    JS_SELF_HOSTED_FN("map", "TypedObjectArrayMap", 2, 0),
-    JS_SELF_HOSTED_FN("reduce", "TypedObjectArrayReduce", 2, 0),
-    JS_SELF_HOSTED_FN("filter", "TypedObjectArrayFilter", 1, 0),
     JS_FS_END};
 
 bool js::CreateUserSizeAndAlignmentProperties(JSContext* cx,
@@ -2347,7 +2337,7 @@ bool TypedObject::construct(JSContext* cx, unsigned int argc, Value* vp) {
   return false;
 }
 
-/* static */ JS::Result<TypedObject*, JS::OOM&> TypedObject::create(
+/* static */ JS::Result<TypedObject*, JS::OOM> TypedObject::create(
     JSContext* cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
     js::HandleShape shape, js::HandleObjectGroup group) {
   debugCheckNewObject(group, shape, kind, heap);
@@ -2439,16 +2429,6 @@ bool js::TypeDescrIsSimpleType(JSContext*, unsigned argc, Value* vp) {
   MOZ_ASSERT(args[0].isObject());
   MOZ_ASSERT(args[0].toObject().is<js::TypeDescr>());
   args.rval().setBoolean(args[0].toObject().is<js::SimpleTypeDescr>());
-  return true;
-}
-
-bool js::TypeDescrIsArrayType(JSContext*, unsigned argc, Value* vp) {
-  CallArgs args = CallArgsFromVp(argc, vp);
-  MOZ_ASSERT(args.length() == 1);
-  MOZ_ASSERT(args[0].isObject());
-  MOZ_ASSERT(args[0].toObject().is<js::TypeDescr>());
-  JSObject& obj = args[0].toObject();
-  args.rval().setBoolean(obj.is<js::ArrayTypeDescr>());
   return true;
 }
 

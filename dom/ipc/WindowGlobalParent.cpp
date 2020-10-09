@@ -12,14 +12,15 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/InProcessParent.h"
 #include "mozilla/dom/BrowserBridgeParent.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/ClientIPCTypes.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/BrowserHost.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/RemoteWebProgress.h"
-#include "mozilla/dom/WindowGlobalActorsBinding.h"
 #include "mozilla/dom/WindowGlobalChild.h"
 #include "mozilla/dom/ChromeUtils.h"
 #include "mozilla/dom/ipc/IdType.h"
@@ -28,6 +29,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/Variant.h"
 #include "mozJSComponentLoader.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
@@ -39,6 +41,8 @@
 #include "nsFrameLoaderOwner.h"
 #include "nsSerializationHelper.h"
 #include "nsIBrowser.h"
+#include "nsIPromptCollection.h"
+#include "nsITimer.h"
 #include "nsITransportSecurityInfo.h"
 #include "nsISharePicker.h"
 #include "mozilla/Telemetry.h"
@@ -62,7 +66,6 @@ WindowGlobalParent::WindowGlobalParent(
     : WindowContext(aBrowsingContext, aInnerWindowId, aOuterWindowId,
                     aInProcess, std::move(aInit)),
       mIsInitialDocument(false),
-      mHasBeforeUnload(false),
       mSandboxFlags(0),
       mDocumentHasLoaded(false),
       mDocumentHasUserInteracted(false),
@@ -392,11 +395,6 @@ IPCResult WindowGlobalParent::RecvUpdateDocumentCspSettings(
   return IPC_OK();
 }
 
-IPCResult WindowGlobalParent::RecvSetHasBeforeUnload(bool aHasBeforeUnload) {
-  mHasBeforeUnload = aHasBeforeUnload;
-  return IPC_OK();
-}
-
 mozilla::ipc::IPCResult WindowGlobalParent::RecvSetClientInfo(
     const IPCClientInfo& aIPCClientInfo) {
   mClientInfo = Some(ClientInfo(aIPCClientInfo));
@@ -675,6 +673,211 @@ WindowGlobalParent::RecvSubmitLoadInputEventResponsePreloadTelemetry(
   return IPC_OK();
 }
 
+namespace {
+
+class CheckPermitUnloadRequest final : public PromiseNativeHandler,
+                                       public nsITimerCallback {
+ public:
+  CheckPermitUnloadRequest(WindowGlobalParent* aWGP, bool aHasInProcessBlocker,
+                           nsIContentViewer::PermitUnloadAction aAction,
+                           std::function<void(bool)>&& aResolver)
+      : mResolver(std::move(aResolver)),
+        mWGP(aWGP),
+        mAction(aAction),
+        mFoundBlocker(aHasInProcessBlocker) {}
+
+  void Run(ContentParent* aIgnoreProcess = nullptr, uint32_t aTimeout = 0) {
+    MOZ_ASSERT(mState == State::UNINITIALIZED);
+    mState = State::WAITING;
+
+    RefPtr<CheckPermitUnloadRequest> self(this);
+
+    AutoTArray<ContentParent*, 8> seen;
+    if (aIgnoreProcess) {
+      seen.AppendElement(aIgnoreProcess);
+    }
+
+    BrowsingContext* bc = mWGP->GetBrowsingContext();
+    bc->PreOrderWalk([&](dom::BrowsingContext* aBC) {
+      if (WindowGlobalParent* wgp =
+              aBC->Canonical()->GetCurrentWindowGlobal()) {
+        ContentParent* cp = wgp->GetContentParent();
+        if (wgp->HasBeforeUnload() && !seen.ContainsSorted(cp)) {
+          seen.InsertElementSorted(cp);
+          mPendingRequests++;
+          auto resolve = [self](bool blockNavigation) {
+            if (blockNavigation) {
+              self->mFoundBlocker = true;
+            }
+            self->ResolveRequest();
+          };
+          if (cp) {
+            cp->SendDispatchBeforeUnloadToSubtree(
+                bc, resolve, [self](auto) { self->ResolveRequest(); });
+          } else {
+            ContentChild::DispatchBeforeUnloadToSubtree(bc, resolve);
+          }
+        }
+      }
+    });
+
+    if (mPendingRequests && aTimeout) {
+      Unused << NS_NewTimerWithCallback(getter_AddRefs(mTimer), this, aTimeout,
+                                        nsITimer::TYPE_ONE_SHOT);
+    }
+
+    CheckDoneWaiting();
+  }
+
+  void ResolveRequest() {
+    mPendingRequests--;
+    CheckDoneWaiting();
+  }
+
+  NS_IMETHODIMP Notify(nsITimer* aTimer) override {
+    MOZ_ASSERT(aTimer == mTimer);
+    if (mState == State::WAITING) {
+      mState = State::TIMED_OUT;
+      CheckDoneWaiting();
+    }
+    return NS_OK;
+  }
+
+  void CheckDoneWaiting() {
+    // If we've found a blocker, we prompt immediately without waiting for
+    // further responses. The user's response applies to the entire navigation
+    // attempt, regardless of how many "beforeunload" listeners we call.
+    if (mState != State::TIMED_OUT &&
+        (mState != State::WAITING || (mPendingRequests && !mFoundBlocker))) {
+      return;
+    }
+
+    mState = State::PROMPTING;
+
+    // Clearing our reference to the timer will automatically cancel it if it's
+    // still running.
+    mTimer = nullptr;
+
+    if (!mFoundBlocker) {
+      SendReply(true);
+      return;
+    }
+
+    auto action = mAction;
+    if (StaticPrefs::dom_disable_beforeunload()) {
+      action = nsIContentViewer::eDontPromptAndUnload;
+    }
+    if (action != nsIContentViewer::ePrompt) {
+      SendReply(action == nsIContentViewer::eDontPromptAndUnload);
+      return;
+    }
+
+    // Handle any failure in prompting by aborting the navigation. See comment
+    // in nsContentViewer::PermitUnload for reasoning.
+    auto cleanup = MakeScopeExit([&]() { SendReply(false); });
+
+    if (nsCOMPtr<nsIPromptCollection> prompt =
+            do_GetService("@mozilla.org/embedcomp/prompt-collection;1")) {
+      RefPtr<Promise> promise;
+      prompt->AsyncBeforeUnloadCheck(mWGP->GetBrowsingContext(),
+                                     getter_AddRefs(promise));
+
+      if (!promise) {
+        return;
+      }
+
+      promise->AppendNativeHandler(this);
+      cleanup.release();
+    }
+  }
+
+  void SendReply(bool aAllow) {
+    MOZ_ASSERT(mState != State::REPLIED);
+    mResolver(aAllow);
+    mState = State::REPLIED;
+  }
+
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+    MOZ_ASSERT(mState == State::PROMPTING);
+
+    SendReply(JS::ToBoolean(aValue));
+  }
+
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+    MOZ_ASSERT(mState == State::PROMPTING);
+
+    SendReply(false);
+  }
+
+  NS_DECL_ISUPPORTS
+
+ private:
+  ~CheckPermitUnloadRequest() {
+    // We may get here without having sent a reply if the promise we're waiting
+    // on is destroyed without being resolved or rejected.
+    if (mState != State::REPLIED) {
+      SendReply(false);
+    }
+  }
+
+  enum class State : uint8_t {
+    UNINITIALIZED,
+    WAITING,
+    TIMED_OUT,
+    PROMPTING,
+    REPLIED,
+  };
+
+  std::function<void(bool)> mResolver;
+
+  RefPtr<WindowGlobalParent> mWGP;
+  nsCOMPtr<nsITimer> mTimer;
+
+  uint32_t mPendingRequests = 0;
+
+  nsIContentViewer::PermitUnloadAction mAction;
+
+  State mState = State::UNINITIALIZED;
+
+  bool mFoundBlocker = false;
+};
+
+NS_IMPL_ISUPPORTS(CheckPermitUnloadRequest, nsITimerCallback)
+
+}  // namespace
+
+mozilla::ipc::IPCResult WindowGlobalParent::RecvCheckPermitUnload(
+    bool aHasInProcessBlocker, XPCOMPermitUnloadAction aAction,
+    CheckPermitUnloadResolver&& aResolver) {
+  if (!IsCurrentGlobal()) {
+    aResolver(false);
+    return IPC_OK();
+  }
+
+  auto request = MakeRefPtr<CheckPermitUnloadRequest>(
+      this, aHasInProcessBlocker, aAction, std::move(aResolver));
+  request->Run(/* aIgnoreProcess */ GetContentParent());
+
+  return IPC_OK();
+}
+
+already_AddRefed<Promise> WindowGlobalParent::PermitUnload(
+    PermitUnloadAction aAction, uint32_t aTimeout, mozilla::ErrorResult& aRv) {
+  nsIGlobalObject* global = GetParentObject();
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  auto request = MakeRefPtr<CheckPermitUnloadRequest>(
+      this, /* aHasInProcessBlocker */ false,
+      nsIContentViewer::PermitUnloadAction(aAction),
+      [promise](bool aAllow) { promise->MaybeResolve(aAllow); });
+  request->Run(/* aIgnoreProcess */ nullptr, aTimeout);
+
+  return promise.forget();
+}
+
 already_AddRefed<mozilla::dom::Promise> WindowGlobalParent::DrawSnapshot(
     const DOMRect* aRect, double aScale, const nsACString& aBackgroundColor,
     mozilla::ErrorResult& aRv) {
@@ -783,11 +986,11 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
     };
 
     bool hasMixedDisplay =
-        mMixedContentSecurityState &
+        mSecurityState &
         (nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT |
          nsIWebProgressListener::STATE_BLOCKED_MIXED_DISPLAY_CONTENT);
     bool hasMixedActive =
-        mMixedContentSecurityState &
+        mSecurityState &
         (nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT |
          nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT);
 
@@ -801,9 +1004,8 @@ void WindowGlobalParent::ActorDestroy(ActorDestroyReason aWhy) {
     }
     Accumulate(Telemetry::MIXED_CONTENT_PAGE_LOAD, mixedContentLevel);
 
-    ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_COUNT, 1);
-    if (GetDocTreeHadAudibleMedia()) {
-      ScalarAdd(Telemetry::ScalarID::MEDIA_PAGE_HAD_MEDIA_COUNT, 1);
+    if (GetDocTreeHadMedia()) {
+      ScalarAdd(Telemetry::ScalarID::MEDIA_ELEMENT_IN_PAGE_COUNT, 1);
     }
   }
 
@@ -900,24 +1102,26 @@ bool WindowGlobalParent::ShouldTrackSiteOriginTelemetry() {
   return DocumentPrincipal()->GetIsContentPrincipal();
 }
 
-void WindowGlobalParent::AddMixedContentSecurityState(uint32_t aStateFlags) {
+void WindowGlobalParent::AddSecurityState(uint32_t aStateFlags) {
   MOZ_ASSERT(TopWindowContext() == this);
   MOZ_ASSERT((aStateFlags &
               (nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT |
                nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT |
                nsIWebProgressListener::STATE_BLOCKED_MIXED_DISPLAY_CONTENT |
-               nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT)) ==
+               nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT |
+               nsIWebProgressListener::STATE_HTTPS_ONLY_MODE_UPGRADED |
+               nsIWebProgressListener::STATE_HTTPS_ONLY_MODE_UPGRADE_FAILED)) ==
                  aStateFlags,
              "Invalid flags specified!");
 
-  if ((mMixedContentSecurityState & aStateFlags) == aStateFlags) {
+  if ((mSecurityState & aStateFlags) == aStateFlags) {
     return;
   }
 
-  mMixedContentSecurityState |= aStateFlags;
+  mSecurityState |= aStateFlags;
 
   if (GetBrowsingContext()->GetCurrentWindowGlobal() == this) {
-    GetBrowsingContext()->UpdateSecurityStateForLocationOrMixedContentChange();
+    GetBrowsingContext()->UpdateSecurityState();
   }
 }
 

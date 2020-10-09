@@ -409,8 +409,7 @@ nsresult SetDefaultPragmas(mozIStorageConnection* aConnection) {
   if (kSQLiteGrowthIncrement) {
     // This is just an optimization so ignore the failure if the disk is
     // currently too full.
-    rv =
-        aConnection->SetGrowthIncrement(kSQLiteGrowthIncrement, EmptyCString());
+    rv = aConnection->SetGrowthIncrement(kSQLiteGrowthIncrement, ""_ns);
     if (rv != NS_ERROR_FILE_TOO_BIG && NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -4258,8 +4257,8 @@ nsresult Connection::EnsureStorageConnection() {
   MOZ_ASSERT(quotaManager);
 
   if (!mDatabaseWasNotAvailable || mHasCreatedDatabase) {
-    LS_TRY_VAR(auto directoryEntry, quotaManager->GetDirectoryForOrigin(
-                                        PERSISTENCE_TYPE_DEFAULT, mOrigin));
+    LS_TRY_UNWRAP(auto directoryEntry, quotaManager->GetDirectoryForOrigin(
+                                           PERSISTENCE_TYPE_DEFAULT, mOrigin));
 
     rv = directoryEntry->Append(
         NS_LITERAL_STRING_FROM_CSTRING(LS_DIRECTORY_NAME));
@@ -7347,8 +7346,8 @@ nsresult PrepareDatastoreOp::DatabaseWork() {
       return rv;
     }
   } else {
-    LS_TRY_VAR(directoryEntry, quotaManager->GetDirectoryForOrigin(
-                                   PERSISTENCE_TYPE_DEFAULT, mOrigin));
+    LS_TRY_UNWRAP(directoryEntry, quotaManager->GetDirectoryForOrigin(
+                                      PERSISTENCE_TYPE_DEFAULT, mOrigin));
 
     quotaManager->EnsureQuotaForOrigin(PERSISTENCE_TYPE_DEFAULT, mGroup,
                                        mOrigin);
@@ -8593,7 +8592,7 @@ void ArchivedOriginScope::GetBindingClause(nsACString& aBindingClause) const {
           " WHERE originAttributes MATCH :originAttributesPattern");
     }
 
-    void operator()(const Null& aNull) { *mBindingClause = EmptyCString(); }
+    void operator()(const Null& aNull) { mBindingClause->Truncate(); }
   };
 
   mData.match(Matcher(&aBindingClause));
@@ -8798,8 +8797,8 @@ Result<UsageInfo, nsresult> QuotaClient::InitOrigin(
   QuotaManager* quotaManager = QuotaManager::Get();
   MOZ_ASSERT(quotaManager);
 
-  LS_TRY_VAR(auto directory,
-             quotaManager->GetDirectoryForOrigin(aPersistenceType, aOrigin));
+  LS_TRY_UNWRAP(auto directory,
+                quotaManager->GetDirectoryForOrigin(aPersistenceType, aOrigin));
 
   MOZ_ASSERT(directory);
 

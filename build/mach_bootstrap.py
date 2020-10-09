@@ -427,7 +427,7 @@ def _finalize_telemetry_legacy(context, instance, handler, success, start_time,
 
     # The user is performing a maintenance command, skip the upload
     if handler.name in ('bootstrap', 'doctor', 'mach-commands', 'vcs-setup',
-                        'create-mach-environment',
+                        'create-mach-environment', 'install-moz-phab',
                         # We call mach environment in client.mk which would cause the
                         # data submission to block the forward progress of make.
                         'environment'):
@@ -544,5 +544,6 @@ class ImportHook(object):
         return module
 
 
-# Install our hook
-builtins.__import__ = ImportHook(builtins.__import__)
+# Install our hook. This can be deleted when the Python 3 migration is complete.
+if sys.version_info[0] < 3:
+    builtins.__import__ = ImportHook(builtins.__import__)

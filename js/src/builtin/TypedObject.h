@@ -602,11 +602,11 @@ class TypedObject : public JSObject {
 
   TypeDescr& typeDescr() const { return group()->typeDescr(); }
 
-  static JS::Result<TypedObject*, JS::OOM&> create(JSContext* cx,
-                                                   js::gc::AllocKind kind,
-                                                   js::gc::InitialHeap heap,
-                                                   js::HandleShape shape,
-                                                   js::HandleObjectGroup group);
+  static JS::Result<TypedObject*, JS::OOM> create(JSContext* cx,
+                                                  js::gc::AllocKind kind,
+                                                  js::gc::InitialHeap heap,
+                                                  js::HandleShape shape,
+                                                  js::HandleObjectGroup group);
 
   uint32_t offset() const;
   uint32_t length() const;
@@ -815,8 +815,6 @@ MOZ_MUST_USE bool ObjectIsTypedObject(JSContext* cx, unsigned argc, Value* vp);
 // descriptor.
 
 MOZ_MUST_USE bool TypeDescrIsSimpleType(JSContext*, unsigned argc, Value* vp);
-
-MOZ_MUST_USE bool TypeDescrIsArrayType(JSContext*, unsigned argc, Value* vp);
 
 /*
  * Usage: TypedObjectTypeDescr(obj)
