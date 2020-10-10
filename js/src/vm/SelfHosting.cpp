@@ -17,6 +17,7 @@
 
 #include "jsdate.h"
 #include "jsfriendapi.h"
+#include "jsmath.h"
 #include "selfhosted.out.h"
 
 #include "builtin/Array.h"
@@ -85,6 +86,7 @@
 #include "vm/StringType.h"
 #include "vm/ToSource.h"  // js::ValueToSource
 #include "vm/TypedArrayObject.h"
+#include "vm/Uint8Clamped.h"
 #include "vm/WrapperObject.h"
 
 #include "gc/GC-inl.h"

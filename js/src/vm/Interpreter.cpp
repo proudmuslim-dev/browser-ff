@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "jslibmath.h"
+#include "jsmath.h"
 #include "jsnum.h"
 
 #include "builtin/Array.h"
@@ -65,7 +66,6 @@
 
 #include "builtin/Boolean-inl.h"
 #include "debugger/DebugAPI-inl.h"
-#include "jit/JitFrames-inl.h"
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSAtom-inl.h"

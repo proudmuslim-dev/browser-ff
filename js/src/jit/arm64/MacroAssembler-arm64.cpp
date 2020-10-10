@@ -6,6 +6,8 @@
 
 #include "jit/arm64/MacroAssembler-arm64.h"
 
+#include "jsmath.h"
+
 #include "jit/arm64/MoveEmitter-arm64.h"
 #include "jit/arm64/SharedICRegisters-arm64.h"
 #include "jit/Bailouts.h"
@@ -14,6 +16,7 @@
 #include "jit/MacroAssembler.h"
 #include "util/Memory.h"
 #include "vm/JitActivation.h"  // js::jit::JitActivation
+#include "vm/JSContext.h"
 
 #include "jit/MacroAssembler-inl.h"
 

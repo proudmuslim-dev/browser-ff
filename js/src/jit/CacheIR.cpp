@@ -10,9 +10,12 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Unused.h"
 
+#include "jsmath.h"
+
 #include "builtin/DataViewObject.h"
 #include "builtin/MapObject.h"
 #include "builtin/ModuleObject.h"
+#include "builtin/TypedObject.h"
 #include "jit/BaselineCacheIRCompiler.h"
 #include "jit/BaselineIC.h"
 #include "jit/CacheIRSpewer.h"
@@ -30,6 +33,7 @@
 #include "util/Unicode.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/BytecodeUtil.h"
+#include "vm/Iteration.h"
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/ProxyObject.h"
 #include "vm/SelfHosting.h"
@@ -1828,6 +1832,13 @@ static TypedThingLayout GetTypedThingLayout(const JSClass* clasp) {
     return TypedThingLayout::InlineTypedObject;
   }
   MOZ_CRASH("Bad object class");
+}
+
+static uint32_t SimpleTypeDescrKey(SimpleTypeDescr* descr) {
+  if (descr->is<ScalarTypeDescr>()) {
+    return uint32_t(descr->as<ScalarTypeDescr>().type()) << 1;
+  }
+  return (uint32_t(descr->as<ReferenceTypeDescr>().type()) << 1) | 1;
 }
 
 AttachDecision GetPropIRGenerator::tryAttachTypedObject(HandleObject obj,

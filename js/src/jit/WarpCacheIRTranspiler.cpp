@@ -15,6 +15,7 @@
 #include "jit/CacheIR.h"
 #include "jit/CacheIRCompiler.h"
 #include "jit/CacheIROpsGenerated.h"
+#include "jit/CompileInfo.h"
 #include "jit/MIR.h"
 #include "jit/MIRBuilderShared.h"
 #include "jit/MIRGenerator.h"
@@ -24,6 +25,7 @@
 #include "jit/WarpSnapshot.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "vm/ArgumentsObject.h"
+#include "vm/BytecodeLocation.h"
 
 #include "gc/ObjectKind-inl.h"
 
