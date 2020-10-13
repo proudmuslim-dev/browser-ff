@@ -15,7 +15,6 @@
 #include "builtin/DataViewObject.h"
 #include "builtin/MapObject.h"
 #include "builtin/ModuleObject.h"
-#include "builtin/TypedObject.h"
 #include "jit/BaselineCacheIRCompiler.h"
 #include "jit/BaselineIC.h"
 #include "jit/CacheIRSpewer.h"
@@ -38,6 +37,7 @@
 #include "vm/ProxyObject.h"
 #include "vm/SelfHosting.h"
 #include "vm/ThrowMsgKind.h"  // ThrowCondition
+#include "wasm/TypedObject.h"
 
 #include "jit/MacroAssembler-inl.h"
 #include "vm/EnvironmentObject-inl.h"
@@ -1879,8 +1879,7 @@ AttachDecision GetPropIRGenerator::tryAttachTypedObject(HandleObject obj,
     Scalar::Type type = ScalarTypeFromSimpleTypeDescrKey(typeDescr);
     monitorLoad = type == Scalar::Uint32;
   } else {
-    ReferenceType type = ReferenceTypeFromSimpleTypeDescrKey(typeDescr);
-    monitorLoad = type != ReferenceType::TYPE_STRING;
+    monitorLoad = true;
   }
 
   if (monitorLoad) {
@@ -3956,13 +3955,8 @@ AttachDecision SetPropIRGenerator::tryAttachTypedObjectProperty(
   // StoreTypedObjectReferenceProperty is infallible.
   ReferenceType type = fieldDescr->as<ReferenceTypeDescr>().type();
   switch (type) {
-    case ReferenceType::TYPE_ANY:
-      break;
     case ReferenceType::TYPE_OBJECT:
       writer.guardIsObjectOrNull(rhsId);
-      break;
-    case ReferenceType::TYPE_STRING:
-      writer.guardNonDoubleType(rhsId, ValueType::String);
       break;
     case ReferenceType::TYPE_WASM_ANYREF:
       MOZ_CRASH();
