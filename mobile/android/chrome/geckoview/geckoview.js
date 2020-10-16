@@ -19,6 +19,8 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   GeckoViewSettings: "resource://gre/modules/GeckoViewSettings.jsm",
   GeckoViewUtils: "resource://gre/modules/GeckoViewUtils.jsm",
   HistogramStopwatch: "resource://gre/modules/GeckoViewTelemetry.jsm",
+  RemoteSecuritySettings:
+    "resource://gre/modules/psm/RemoteSecuritySettings.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(this, "WindowEventDispatcher", () =>
@@ -258,11 +260,6 @@ var ModuleManager = {
         module.impl.onSettingsUpdate();
       }
     });
-
-    this._browser.messageManager.sendAsyncMessage(
-      "GeckoView:UpdateSettings",
-      aSettings
-    );
   },
 
   onMessageFromActor(aActorName, aMessage) {
@@ -490,7 +487,7 @@ class ModuleInfo {
       }
     }
 
-    this._updateContentModuleState(/* includeSettings */ aEnabled);
+    this._updateContentModuleState();
   }
 
   receiveMessage(aMessage) {
@@ -502,20 +499,19 @@ class ModuleInfo {
   }
 
   onContentModuleLoaded() {
-    this._updateContentModuleState(/* includeSettings */ true);
+    this._updateContentModuleState();
 
     if (this._impl) {
       this._impl.onContentModuleLoaded();
     }
   }
 
-  _updateContentModuleState(aIncludeSettings) {
+  _updateContentModuleState() {
     this._manager.messageManager.sendAsyncMessage(
       "GeckoView:UpdateModuleState",
       {
         module: this._name,
         enabled: this.enabled,
-        settings: aIncludeSettings ? this._manager.settings : null,
       }
     );
   }
@@ -649,7 +645,16 @@ function startup() {
     {
       name: "GeckoViewScroll",
       onEnable: {
-        frameScript: "chrome://geckoview/content/GeckoViewScrollChild.js",
+        actors: {
+          ScrollDelegate: {
+            child: {
+              moduleURI: "resource:///actors/ScrollDelegateChild.jsm",
+              events: {
+                mozvisualscroll: { mozSystemGroup: true },
+              },
+            },
+          },
+        },
       },
     },
     {
@@ -725,6 +730,10 @@ function startup() {
     // while GeckoView started up.
     InitLater(() => {
       Services.obs.notifyObservers(window, "extensions-late-startup");
+    });
+
+    InitLater(() => {
+      RemoteSecuritySettings.init();
     });
 
     // This should always go last, since the idle tasks (except for the ones with

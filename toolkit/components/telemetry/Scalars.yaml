@@ -4493,6 +4493,37 @@ widget:
     record_in_processes:
       - 'main'
 
+  gtk_theme_scrollbar_uses_images:
+    bug_numbers:
+      - 1670145
+    description: >
+      Whether the active Gtk theme uses background images for its scrollbar
+      parts.
+    kind: boolean
+    expires: "87"
+    notification_emails:
+      - layout-telemetry-alerts@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+
+  gtk_version:
+    bug_numbers:
+      - 1670145
+    description: >
+      The version of Gtk 3 in use.
+    kind: string
+    expires: never
+    notification_emails:
+      - layout-telemetry-alerts@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+
 # The following section contains memory reporter counters.
 memoryreporter:
   max_ghost_windows:
@@ -5497,6 +5528,23 @@ urlbar.searchmode:
     description: >
       A keyed uint recording how many times the user entered a particular search
       mode after selecting a tab-to-search result.
+    expires: never
+    kind: uint
+    keyed: true
+    notification_emails:
+      - fx-search@mozilla.com
+      - tbrooks@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+  tabtosearch_onboard:
+    bug_numbers:
+      - 1665934
+    description: >
+      A keyed uint recording how many times the user entered a particular search
+      mode after selecting a tab-to-search onboarding result.
     expires: never
     kind: uint
     keyed: true

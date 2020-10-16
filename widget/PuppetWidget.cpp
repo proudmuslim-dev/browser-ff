@@ -9,6 +9,7 @@
 
 #include "ClientLayerManager.h"
 #include "gfxPlatform.h"
+#include "nsRefreshDriver.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Hal.h"
@@ -268,10 +269,8 @@ void PuppetWidget::Invalidate(const LayoutDeviceIntRect& aRect) {
     return;
   }
 
-  mDirtyRegion.Or(mDirtyRegion, aRect);
-
-  if (mBrowserChild && !mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
-    mPaintTask = new PaintTask(this);
+  if (mBrowserChild && !aRect.IsEmpty() && !mPaintTask.IsPending()) {
+    mPaintTask = new PaintTask(this, false);
     nsCOMPtr<nsIRunnable> event(mPaintTask.get());
     SchedulerGroup::Dispatch(TaskCategory::Other, event.forget());
     return;
@@ -743,6 +742,8 @@ NativeIMEContext PuppetWidget::GetNativeIMEContext() {
 
 nsresult PuppetWidget::NotifyIMEOfFocusChange(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
+
   if (!mBrowserChild) {
     return NS_ERROR_FAILURE;
   }
@@ -789,6 +790,8 @@ nsresult PuppetWidget::NotifyIMEOfFocusChange(
 
 nsresult PuppetWidget::NotifyIMEOfCompositionUpdate(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
+
   if (NS_WARN_IF(!mBrowserChild)) {
     return NS_ERROR_FAILURE;
   }
@@ -804,8 +807,10 @@ nsresult PuppetWidget::NotifyIMEOfCompositionUpdate(
 
 nsresult PuppetWidget::NotifyIMEOfTextChange(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
   MOZ_ASSERT(aIMENotification.mMessage == NOTIFY_IME_OF_TEXT_CHANGE,
              "Passed wrong notification");
+
   if (!mBrowserChild) {
     return NS_ERROR_FAILURE;
   }
@@ -835,6 +840,7 @@ nsresult PuppetWidget::NotifyIMEOfTextChange(
 
 nsresult PuppetWidget::NotifyIMEOfSelectionChange(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
   MOZ_ASSERT(aIMENotification.mMessage == NOTIFY_IME_OF_SELECTION_CHANGE,
              "Passed wrong notification");
   if (!mBrowserChild) {
@@ -862,6 +868,7 @@ nsresult PuppetWidget::NotifyIMEOfSelectionChange(
 
 nsresult PuppetWidget::NotifyIMEOfMouseButtonEvent(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
   if (!mBrowserChild) {
     return NS_ERROR_FAILURE;
   }
@@ -883,6 +890,7 @@ nsresult PuppetWidget::NotifyIMEOfMouseButtonEvent(
 
 nsresult PuppetWidget::NotifyIMEOfPositionChange(
     const IMENotification& aIMENotification) {
+  MOZ_ASSERT(IMEStateManager::CanSendNotificationToTheMainProcess());
   if (NS_WARN_IF(!mBrowserChild)) {
     return NS_ERROR_FAILURE;
   }
@@ -971,59 +979,25 @@ void PuppetWidget::ClearCachedCursor() {
   mCustomCursor = nullptr;
 }
 
-nsresult PuppetWidget::Paint() {
-  MOZ_ASSERT(!mDirtyRegion.IsEmpty(), "paint event logic messed up");
-
-  if (!GetCurrentWidgetListener()) return NS_OK;
-
-  LayoutDeviceIntRegion region = mDirtyRegion;
+nsresult PuppetWidget::Paint(bool aDoTick) {
+  if (!GetCurrentWidgetListener()) {
+    return NS_OK;
+  }
 
   // reset repaint tracking
-  mDirtyRegion.SetEmpty();
   mPaintTask.Revoke();
 
   RefPtr<PuppetWidget> strongThis(this);
 
-  GetCurrentWidgetListener()->WillPaintWindow(this);
-
-  if (GetCurrentWidgetListener()) {
-#ifdef DEBUG
-    debug_DumpPaintEvent(stderr, this, region.ToUnknownRegion(), "PuppetWidget",
-                         0);
-#endif
-
-    if (mLayerManager->GetBackendType() ==
-            mozilla::layers::LayersBackend::LAYERS_CLIENT ||
-        mLayerManager->GetBackendType() ==
-            mozilla::layers::LayersBackend::LAYERS_WR ||
-        (mozilla::layers::LayersBackend::LAYERS_BASIC ==
-             mLayerManager->GetBackendType() &&
-         mBrowserChild && mBrowserChild->IsLayersConnected().isSome())) {
-      // Do nothing, the compositor will handle drawing
-      if (mBrowserChild) {
-        mBrowserChild->NotifyPainted();
-      }
-    } else if (mozilla::layers::LayersBackend::LAYERS_BASIC ==
-               mLayerManager->GetBackendType()) {
-      RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(mDrawTarget);
-      if (!ctx) {
-        gfxDevCrash(LogReason::InvalidContext)
-            << "PuppetWidget context problem " << gfx::hexa(mDrawTarget);
-        return NS_ERROR_FAILURE;
-      }
-      ctx->Rectangle(gfxRect(0, 0, 0, 0));
-      ctx->Clip();
-      AutoLayerManagerSetup setupLayerManager(this, ctx,
-                                              BufferMode::BUFFER_NONE);
-      GetCurrentWidgetListener()->PaintWindow(this, region);
-      if (mBrowserChild) {
-        mBrowserChild->NotifyPainted();
+  if (PresShell* presShell = mBrowserChild->GetTopLevelPresShell()) {
+    if (RefPtr<nsRefreshDriver> refreshDriver = presShell->GetRefreshDriver()) {
+      refreshDriver->ScheduleViewManagerFlush();
+      // The Tick here is mainly for optimization purpose; Ticking
+      // here allows us to notify layer updates faster.
+      if (aDoTick) {
+        refreshDriver->DoTick();
       }
     }
-  }
-
-  if (GetCurrentWidgetListener()) {
-    GetCurrentWidgetListener()->DidPaintWindow();
   }
 
   return NS_OK;
@@ -1040,14 +1014,14 @@ void PuppetWidget::SetChild(PuppetWidget* aChild) {
 NS_IMETHODIMP
 PuppetWidget::PaintTask::Run() {
   if (mWidget) {
-    mWidget->Paint();
+    mWidget->Paint(mDoTick);
   }
   return NS_OK;
 }
 
 void PuppetWidget::PaintNowIfNeeded() {
   if (IsVisible() && mPaintTask.IsPending()) {
-    Paint();
+    Paint(true);
   }
 }
 

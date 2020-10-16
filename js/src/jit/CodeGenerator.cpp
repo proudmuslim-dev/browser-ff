@@ -5201,6 +5201,16 @@ void CodeGenerator::visitGuardFunctionFlags(LGuardFunctionFlags* lir) {
   bailoutFrom(&bail, lir->snapshot());
 }
 
+void CodeGenerator::visitGuardFunctionIsNonBuiltinCtor(
+    LGuardFunctionIsNonBuiltinCtor* lir) {
+  Register function = ToRegister(lir->function());
+  Register temp = ToRegister(lir->temp());
+
+  Label bail;
+  masm.branchIfNotFunctionIsNonBuiltinCtor(function, temp, &bail);
+  bailoutFrom(&bail, lir->snapshot());
+}
+
 void CodeGenerator::visitGuardFunctionKind(LGuardFunctionKind* lir) {
   Register function = ToRegister(lir->function());
   Register temp = ToRegister(lir->temp());
@@ -15314,6 +15324,7 @@ void CodeGenerator::emitIonToWasmCallBase(LIonToWasmCallBase<NumDefs>* lir) {
             argMir = ToMIRType(sig.args()[i]);
             break;
           case wasm::RefType::Func:
+          case wasm::RefType::Eq:
           case wasm::RefType::TypeIndex:
             MOZ_CRASH("unexpected argument type when calling from ion to wasm");
         }
@@ -15379,12 +15390,13 @@ void CodeGenerator::emitIonToWasmCallBase(LIonToWasmCallBase<NumDefs>* lir) {
         MOZ_CRASH("unexpected return type when calling from ion to wasm");
       case wasm::ValType::Ref:
         switch (results[0].refTypeKind()) {
-          case wasm::RefType::Extern:
           case wasm::RefType::Func:
+          case wasm::RefType::Extern:
+          case wasm::RefType::Eq:
             // The wasm stubs layer unboxes anything that needs to be unboxed
-            // and leaves it in a Value.  A FuncRef we could in principle leave
-            // as a raw object pointer but for now it complicates the API to do
-            // so.
+            // and leaves it in a Value.  A FuncRef/EqRef we could in principle
+            // leave it as a raw object pointer but for now it complicates the
+            // API to do so.
             MOZ_ASSERT(lir->mir()->type() == MIRType::Value);
             break;
           case wasm::RefType::TypeIndex:

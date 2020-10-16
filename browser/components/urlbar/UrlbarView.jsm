@@ -81,7 +81,7 @@ class UrlbarView {
 
     for (let viewTemplate of UrlbarView.dynamicViewTemplatesByName.values()) {
       if (viewTemplate.stylesheet) {
-        this._addDynamicStylesheet(viewTemplate.stylesheet);
+        addDynamicStylesheet(this.window, viewTemplate.stylesheet);
       }
     }
   }
@@ -309,11 +309,27 @@ class UrlbarView {
    * @param {boolean} options.reverse
    *   Set to true to select the previous item. By default the next item
    *   will be selected.
+   * @param {boolean} options.userPressedTab
+   *   Set to true if the user pressed Tab to select a result. Default false.
    */
-  selectBy(amount, { reverse = false } = {}) {
+  selectBy(amount, { reverse = false, userPressedTab = false } = {}) {
     if (!this.isOpen) {
       throw new Error(
         "UrlbarView: Cannot select an item if the view isn't open."
+      );
+    }
+
+    // Do not set aria-activedescendant if the user is moving to a
+    // tab-to-search result with the Tab key. If
+    // accessibility.tabToSearch.announceResults is set, the tab-to-search
+    // result was announced to the user as they typed. We don't set
+    // aria-activedescendant so the user doesn't think they have to press
+    // Enter to enter search mode. See bug 1647929.
+    function isSkippableTabToSearchAnnounce(selectedElt) {
+      return (
+        selectedElt?.result?.providerName == "TabToSearch" &&
+        userPressedTab &&
+        UrlbarPrefs.get("accessibility.tabToSearch.announceResults")
       );
     }
 
@@ -330,9 +346,12 @@ class UrlbarView {
     let lastSelectableElement = this._getLastSelectableElement();
 
     if (!selectedElement) {
-      this._selectElement(
-        reverse ? lastSelectableElement : firstSelectableElement
-      );
+      selectedElement = reverse
+        ? lastSelectableElement
+        : firstSelectableElement;
+      this._selectElement(selectedElement, {
+        setAccessibleFocus: !isSkippableTabToSearchAnnounce(selectedElement),
+      });
       return;
     }
     let endReached = reverse
@@ -346,7 +365,9 @@ class UrlbarView {
           ? lastSelectableElement
           : firstSelectableElement;
       }
-      this._selectElement(selectedElement);
+      this._selectElement(selectedElement, {
+        setAccessibleFocus: !isSkippableTabToSearchAnnounce(selectedElement),
+      });
       return;
     }
 
@@ -362,7 +383,9 @@ class UrlbarView {
       }
       selectedElement = next;
     }
-    this._selectElement(selectedElement);
+    this._selectElement(selectedElement, {
+      setAccessibleFocus: !isSkippableTabToSearchAnnounce(selectedElement),
+    });
   }
 
   removeAccessibleFocus() {
@@ -390,6 +413,7 @@ class UrlbarView {
     this.removeAccessibleFocus();
     this.input.inputField.setAttribute("aria-expanded", "false");
     this._openPanelInstance = null;
+    this._previousTabToSearchEngine = null;
 
     this.input.removeAttribute("open");
     this.input.endLayoutExtend();
@@ -492,6 +516,9 @@ class UrlbarView {
     this._queryWasCancelled = false;
     this._queryUpdatedResults = false;
     this._openPanelInstance = null;
+    if (!queryContext.searchString) {
+      this._previousTabToSearchEngine = null;
+    }
     this._startRemoveStaleRowsTimer();
   }
 
@@ -578,6 +605,25 @@ class UrlbarView {
         updateInput: false,
         setAccessibleFocus: this.controller._userSelectionBehavior == "arrow",
       });
+    }
+
+    // Announce tab-to-search results to screen readers as the user types.
+    // Check to make sure we don't announce the same engine multiple times in
+    // a row.
+    let secondResult = queryContext.results[1];
+    if (
+      secondResult?.providerName == "TabToSearch" &&
+      UrlbarPrefs.get("accessibility.tabToSearch.announceResults") &&
+      this._previousTabToSearchEngine != secondResult.payload.engine
+    ) {
+      let engine = secondResult.payload.engine;
+      this.window.A11yUtils.announce({
+        id: UrlbarUtils.WEB_ENGINE_NAMES.has(engine)
+          ? "urlbar-result-action-before-tabtosearch-web"
+          : "urlbar-result-action-before-tabtosearch-other",
+        args: { engine },
+      });
+      this._previousTabToSearchEngine = engine;
     }
 
     // If we update the selected element, a new unique ID is generated for it.
@@ -704,7 +750,7 @@ class UrlbarView {
     this.dynamicViewTemplatesByName.set(name, viewTemplate);
     if (viewTemplate.stylesheet) {
       for (let window of BrowserWindowTracker.orderedWindows) {
-        window.gURLBar.view._addDynamicStylesheet(viewTemplate.stylesheet);
+        addDynamicStylesheet(window, viewTemplate.stylesheet);
       }
     }
   }
@@ -724,7 +770,7 @@ class UrlbarView {
     this.dynamicViewTemplatesByName.delete(name);
     if (viewTemplate.stylesheet) {
       for (let window of BrowserWindowTracker.orderedWindows) {
-        window.gURLBar.view._removeDynamicStylesheet(viewTemplate.stylesheet);
+        removeDynamicStylesheet(window, viewTemplate.stylesheet);
       }
     }
   }
@@ -1064,6 +1110,8 @@ class UrlbarView {
       item.setAttribute("type", "dynamic");
       this._updateRowForDynamicType(item, result);
       return;
+    } else if (result.providerName == "TabToSearch") {
+      item.setAttribute("type", "tabtosearch");
     } else {
       item.removeAttribute("type");
     }
@@ -1076,12 +1124,6 @@ class UrlbarView {
       favicon.src = this._iconForSearchResult(result);
     } else {
       favicon.src = result.payload.icon || UrlbarUtils.ICON.DEFAULT;
-    }
-
-    if (result.payload.isPinned) {
-      item.toggleAttribute("pinned", true);
-    } else {
-      item.removeAttribute("pinned");
     }
 
     let title = item._elements.get("title");
@@ -1205,6 +1247,24 @@ class UrlbarView {
       action.toggleAttribute("slide-in", true);
     } else {
       action.removeAttribute("slide-in");
+    }
+
+    if (result.payload.isPinned) {
+      item.toggleAttribute("pinned", true);
+    } else {
+      item.removeAttribute("pinned");
+    }
+
+    if (result.payload.isSponsored) {
+      item.toggleAttribute("sponsored", true);
+      actionSetter = () => {
+        this.document.l10n.setAttributes(
+          action,
+          "urlbar-result-action-sponsored"
+        );
+      };
+    } else {
+      item.removeAttribute("sponsored");
     }
 
     let url = item._elements.get("url");
@@ -1765,47 +1825,6 @@ class UrlbarView {
     return true;
   }
 
-  /**
-   * Adds a dynamic result type stylesheet to the view's window.
-   *
-   * @param {string} stylesheetURL
-   *   The stylesheet's URL.
-   */
-  async _addDynamicStylesheet(stylesheetURL) {
-    // Try-catch all of these so that failing to load a stylesheet doesn't break
-    // callers and possibly the urlbar.  If a stylesheet does fail to load, the
-    // dynamic results that depend on it will appear broken, but at least we
-    // won't break the whole urlbar.
-    try {
-      let uri = Services.io.newURI(stylesheetURL);
-      let sheet = await styleSheetService.preloadSheetAsync(
-        uri,
-        Ci.nsIStyleSheetService.AGENT_SHEET
-      );
-      this.window.windowUtils.addSheet(sheet, Ci.nsIDOMWindowUtils.AGENT_SHEET);
-    } catch (ex) {
-      Cu.reportError(`Error adding dynamic stylesheet: ${ex}`);
-    }
-  }
-
-  /**
-   * Removes a dynamic result type stylesheet from the view's window.
-   *
-   * @param {string} stylesheetURL
-   *   The stylesheet's URL.
-   */
-  _removeDynamicStylesheet(stylesheetURL) {
-    // Try-catch for the same reason as desribed in _addDynamicStylesheet.
-    try {
-      this.window.windowUtils.removeSheetUsingURIString(
-        stylesheetURL,
-        Ci.nsIDOMWindowUtils.AGENT_SHEET
-      );
-    } catch (ex) {
-      Cu.reportError(`Error removing dynamic stylesheet: ${ex}`);
-    }
-  }
-
   // Event handlers below.
 
   _on_SelectedOneOffButtonChanged() {
@@ -2054,5 +2073,50 @@ class QueryContextCache {
 
   get(searchString) {
     return this._cache.find(e => e.searchString == searchString);
+  }
+}
+
+/**
+ * Adds a dynamic result type stylesheet to a specified window.
+ *
+ * @param {Window} window
+ *   The window to which to add the stylesheet.
+ * @param {string} stylesheetURL
+ *   The stylesheet's URL.
+ */
+async function addDynamicStylesheet(window, stylesheetURL) {
+  // Try-catch all of these so that failing to load a stylesheet doesn't break
+  // callers and possibly the urlbar.  If a stylesheet does fail to load, the
+  // dynamic results that depend on it will appear broken, but at least we
+  // won't break the whole urlbar.
+  try {
+    let uri = Services.io.newURI(stylesheetURL);
+    let sheet = await styleSheetService.preloadSheetAsync(
+      uri,
+      Ci.nsIStyleSheetService.AGENT_SHEET
+    );
+    window.windowUtils.addSheet(sheet, Ci.nsIDOMWindowUtils.AGENT_SHEET);
+  } catch (ex) {
+    Cu.reportError(`Error adding dynamic stylesheet: ${ex}`);
+  }
+}
+
+/**
+ * Removes a dynamic result type stylesheet from the view's window.
+ *
+ * @param {Window} window
+ *   The window from which to remove the stylesheet.
+ * @param {string} stylesheetURL
+ *   The stylesheet's URL.
+ */
+function removeDynamicStylesheet(window, stylesheetURL) {
+  // Try-catch for the same reason as desribed in addDynamicStylesheet.
+  try {
+    window.windowUtils.removeSheetUsingURIString(
+      stylesheetURL,
+      Ci.nsIDOMWindowUtils.AGENT_SHEET
+    );
+  } catch (ex) {
+    Cu.reportError(`Error removing dynamic stylesheet: ${ex}`);
   }
 }

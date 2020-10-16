@@ -91,6 +91,7 @@
 
 using namespace js;
 
+using mozilla::CheckedInt;
 using mozilla::Maybe;
 using mozilla::PodCopy;
 using mozilla::PointerRangeSize;
@@ -4512,6 +4513,8 @@ js::UniquePtr<ImmutableScriptData> ImmutableScriptData::new_(
     mozilla::Span<const ScopeNote> scopeNotes,
     mozilla::Span<const TryNote> tryNotes) {
   MOZ_RELEASE_ASSERT(code.Length() <= frontend::MaxBytecodeLength);
+  MOZ_ASSERT_IF(!resumeOffsets.IsEmpty(),
+                nfixed <= GeneratorObject::FixedSlotLimit);
 
   // There are 1-4 copies of SrcNoteType::Null appended after the source
   // notes. These are a combination of sentinel and padding values.

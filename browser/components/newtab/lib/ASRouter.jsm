@@ -32,6 +32,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   SpecialMessageActions:
     "resource://messaging-system/lib/SpecialMessageActions.jsm",
   TargetingContext: "resource://messaging-system/targeting/Targeting.jsm",
+  MacAttribution: "resource:///modules/MacAttribution.jsm",
 });
 XPCOMUtils.defineLazyServiceGetters(this, {
   BrowserHandler: ["@mozilla.org/browser/clh;1", "nsIBrowserHandler"],
@@ -380,7 +381,9 @@ const MessageLoaderUtils = {
             branchValue.trigger
           ) {
             experiments.push({
-              forReachEvent: { sent: false },
+              // Used by `_recordReachEvent` to filter and decide if a reach
+              // ping should be sent
+              forReachEvent: { sent: false, group: featureId },
               experimentSlug: experimentData.slug,
               branchSlug: branch.slug,
               ...branchValue,
@@ -1716,14 +1719,6 @@ class _ASRouter {
     }
   }
 
-  // Windows specific calls to write attribution data
-  // Used by `forceAttribution` to set required targeting attributes for
-  // RTAMO messages. This should only be called from within about:newtab#asrouter
-  /* istanbul ignore next */
-  async _writeAttributionFile(data) {
-    await AttributionCode.writeAttributionFile(data);
-  }
-
   /**
    * forceAttribution - this function should only be called from within about:newtab#asrouter.
    * It forces the browser attribution to be set to something specified in asrouter admin
@@ -1738,9 +1733,11 @@ class _ASRouter {
       .join("&");
     if (AppConstants.platform === "win") {
       // The whole attribution data is encoded (again) for windows
-      this._writeAttributionFile(encodeURIComponent(attributionData));
+      await AttributionCode.writeAttributionFile(
+        encodeURIComponent(attributionData)
+      );
     } else if (AppConstants.platform === "macosx") {
-      let appPath = Services.dirsvc.get("GreD", Ci.nsIFile).parent.parent.path;
+      let appPath = MacAttribution.applicationPath;
       let attributionSvc = Cc["@mozilla.org/mac-attribution;1"].getService(
         Ci.nsIMacAttributionService
       );
@@ -1750,6 +1747,9 @@ class _ASRouter {
 
       // This sets the Attribution to be the referrer
       attributionSvc.setReferrerUrl(appPath, referrer, true);
+
+      // Delete attribution data file
+      await AttributionCode.deleteFileAsync();
     }
 
     // Clear cache call is only possible in a testing environment
@@ -1857,8 +1857,9 @@ class _ASRouter {
   }
 
   _recordReachEvent(message) {
+    const messageGroup = message.forReachEvent.group;
     // Events telemetry only accepts understores for the event `object`
-    const underscored = message.group.split("-").join("_");
+    const underscored = messageGroup.split("-").join("_");
     const extra = { branches: message.branchSlug };
     Services.telemetry.recordEvent(
       REACH_EVENT_CATEGORY,

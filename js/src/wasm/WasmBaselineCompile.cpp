@@ -12803,27 +12803,22 @@ bool BaseCompiler::emitStructNarrow() {
 
   // struct.narrow validation ensures that these hold.
 
-  MOZ_ASSERT(inputType.isExternRef() || moduleEnv_.isStructType(inputType));
-  MOZ_ASSERT(outputType.isExternRef() || moduleEnv_.isStructType(outputType));
-  MOZ_ASSERT_IF(outputType.isExternRef(), inputType.isExternRef());
+  MOZ_ASSERT(inputType.isEqRef() || moduleEnv_.isStructType(inputType));
+  MOZ_ASSERT(outputType.isEqRef() || moduleEnv_.isStructType(outputType));
+  MOZ_ASSERT_IF(outputType.isEqRef(), inputType.isEqRef());
 
-  // AnyRef -> AnyRef is a no-op, just leave the value on the stack.
+  // EqRef -> EqRef is a no-op, just leave the value on the stack.
 
-  if (inputType.isExternRef() && outputType.isExternRef()) {
+  if (inputType.isEqRef() && outputType.isEqRef()) {
     return true;
   }
 
   RegPtr rp = popRef();
 
-  // AnyRef -> (optref T) must first unbox; leaves rp or null
-
-  bool mustUnboxAnyref = inputType.isExternRef();
-
-  // Dynamic downcast (optref T) -> (optref U), leaves rp or null
+  // Dynamic downcast eqref|(optref T) -> (optref U), leaves rp or null
   const StructType& outputStruct =
       moduleEnv_.types[outputType.refType().typeIndex()].structType();
 
-  pushI32(mustUnboxAnyref);
   pushI32(outputStruct.moduleIndex_);
   pushRef(rp);
   return emitInstanceCall(lineOrBytecode, SASigStructNarrow);
@@ -14655,7 +14650,7 @@ bool BaseCompiler::emitBody() {
         if (!moduleEnv_.gcTypesEnabled()) {
           return iter_.unrecognizedOpcode(&op);
         }
-        CHECK_NEXT(dispatchComparison(emitCompareRef, RefType::extern_(),
+        CHECK_NEXT(dispatchComparison(emitCompareRef, RefType::eq(),
                                       Assembler::Equal));
 #endif
 #ifdef ENABLE_WASM_REFTYPES
@@ -14970,20 +14965,15 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorBinary(NarrowUI32x4));
           case uint32_t(SimdOp::V8x16Swizzle):
             CHECK_NEXT(dispatchVectorBinary(Swizzle));
-          case uint32_t(SimdOp::F32x4PMaxExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4PMax):
             CHECK_NEXT(dispatchVectorBinary(PMaxF32x4));
-          case uint32_t(SimdOp::F32x4PMinExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4PMin):
             CHECK_NEXT(dispatchVectorBinary(PMinF32x4));
-          case uint32_t(SimdOp::F64x2PMaxExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2PMax):
             CHECK_NEXT(dispatchVectorBinary(PMaxF64x2));
-          case uint32_t(SimdOp::F64x2PMinExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2PMin):
             CHECK_NEXT(dispatchVectorBinary(PMinF64x2));
-          case uint32_t(SimdOp::I32x4DotSI16x8Experimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::I32x4DotSI16x8):
             CHECK_NEXT(dispatchVectorBinary(DotI16x8));
           case uint32_t(SimdOp::I8x16Neg):
             CHECK_NEXT(dispatchVectorUnary(NegI8x16));
@@ -15037,29 +15027,21 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(dispatchVectorUnary(AbsI16x8));
           case uint32_t(SimdOp::I32x4Abs):
             CHECK_NEXT(dispatchVectorUnary(AbsI32x4));
-          case uint32_t(SimdOp::F32x4CeilExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4Ceil):
             CHECK_NEXT(dispatchVectorUnary(CeilF32x4));
-          case uint32_t(SimdOp::F32x4FloorExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4Floor):
             CHECK_NEXT(dispatchVectorUnary(FloorF32x4));
-          case uint32_t(SimdOp::F32x4TruncExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4Trunc):
             CHECK_NEXT(dispatchVectorUnary(TruncF32x4));
-          case uint32_t(SimdOp::F32x4NearestExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F32x4Nearest):
             CHECK_NEXT(dispatchVectorUnary(NearestF32x4));
-          case uint32_t(SimdOp::F64x2CeilExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2Ceil):
             CHECK_NEXT(dispatchVectorUnary(CeilF64x2));
-          case uint32_t(SimdOp::F64x2FloorExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2Floor):
             CHECK_NEXT(dispatchVectorUnary(FloorF64x2));
-          case uint32_t(SimdOp::F64x2TruncExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2Trunc):
             CHECK_NEXT(dispatchVectorUnary(TruncF64x2));
-          case uint32_t(SimdOp::F64x2NearestExperimental):
-            CHECK_SIMD_EXPERIMENTAL();
+          case uint32_t(SimdOp::F64x2Nearest):
             CHECK_NEXT(dispatchVectorUnary(NearestF64x2));
           case uint32_t(SimdOp::I8x16Shl):
             CHECK_NEXT(dispatchVectorVariableShift(ShiftLeftI8x16));

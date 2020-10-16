@@ -146,6 +146,11 @@ const char nsXPLookAndFeel::sColorPrefs[][41] = {
     "ui.IMESelectedConvertedTextForeground",
     "ui.IMESelectedConvertedTextUnderline",
     "ui.SpellCheckerUnderline",
+    "ui.scrollbarInactive",
+    "ui.scrollbarThumb",
+    "ui.scrollbarThumbHover",
+    "ui.scrollbarThumbActive",
+    "ui.scrollbarThumbInactive",
     "ui.activeborder",
     "ui.activecaption",
     "ui.appworkspace",
@@ -1004,6 +1009,10 @@ LookAndFeelCache nsXPLookAndFeel::GetCacheImpl() { return LookAndFeelCache{}; }
 static bool sRecordedLookAndFeelTelemetry = false;
 
 void nsXPLookAndFeel::RecordTelemetry() {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
   if (sRecordedLookAndFeelTelemetry) {
     return;
   }
@@ -1014,6 +1023,8 @@ void nsXPLookAndFeel::RecordTelemetry() {
   Telemetry::ScalarSet(
       Telemetry::ScalarID::WIDGET_DARK_MODE,
       NS_SUCCEEDED(GetIntImpl(IntID::SystemUsesDarkTheme, i)) && i != 0);
+
+  RecordLookAndFeelSpecificTelemetry();
 }
 
 namespace mozilla {

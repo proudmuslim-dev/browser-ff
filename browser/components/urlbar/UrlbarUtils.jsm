@@ -134,6 +134,7 @@ var UrlbarUtils = {
     EXTENSION: "chrome://browser/content/extension.svg",
     HISTORY: "chrome://browser/skin/history.svg",
     SEARCH_GLASS: "chrome://browser/skin/search-glass.svg",
+    SEARCH_GLASS_INVERTED: "chrome://browser/skin/search-glass-inverted.svg",
     TIP: "chrome://browser/skin/tip.svg",
   },
 
@@ -198,7 +199,7 @@ var UrlbarUtils = {
   ]),
 
   // Valid entry points for search mode. If adding a value here, please update
-  // telemetry documentation.
+  // telemetry documentation and Scalars.yaml.
   SEARCH_MODE_ENTRY: new Set([
     "bookmarkmenu",
     "handoff",
@@ -208,6 +209,7 @@ var UrlbarUtils = {
     "shortcut",
     "tabmenu",
     "tabtosearch",
+    "tabtosearch_onboard",
     "topsites_newtab",
     "topsites_urlbar",
     "touchbar",
@@ -526,6 +528,9 @@ var UrlbarUtils = {
    *          dropdown.
    */
   getSpanForResult(result) {
+    if (result.resultSpan) {
+      return result.resultSpan;
+    }
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.URL:
       case UrlbarUtils.RESULT_TYPE.BOOKMARKS:
@@ -1007,6 +1012,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
         type: "string",
       },
       isPinned: {
+        type: "boolean",
+      },
+      isSponsored: {
         type: "boolean",
       },
       sendAttributionRequest: {

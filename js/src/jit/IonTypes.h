@@ -230,6 +230,9 @@ enum class BailoutKind : uint8_t {
   // Bailout triggered by MGuardFunctionFlags.
   FunctionFlagsGuard,
 
+  // Bailout triggered by MGuardFunctionIsNonBuiltinCtor.
+  FunctionIsNonBuiltinCtorGuard,
+
   // Bailout triggered by MGuardFunctionKind.
   FunctionKindGuard,
 
@@ -368,6 +371,8 @@ inline const char* BailoutKindString(BailoutKind kind) {
       return "TagNotEqualGuard";
     case BailoutKind::FunctionFlagsGuard:
       return "FunctionFlagsGuard";
+    case BailoutKind::FunctionIsNonBuiltinCtorGuard:
+      return "FunctionIsNonBuiltinCtorGuard";
     case BailoutKind::FunctionKindGuard:
       return "FunctionKindGuard";
     case BailoutKind::FunctionScriptGuard:
@@ -1061,9 +1066,8 @@ enum ABIFunctionType : uint32_t {
       ArgType_General, {ArgType_General, ArgType_Int32}),
   Args_General_GeneralInt32Int32 = detail::MakeABIFunctionType(
       ArgType_General, {ArgType_General, ArgType_Int32, ArgType_Int32}),
-  Args_General_GeneralInt32Int32General = detail::MakeABIFunctionType(
-      ArgType_General,
-      {ArgType_General, ArgType_Int32, ArgType_Int32, ArgType_General}),
+  Args_General_GeneralInt32General = detail::MakeABIFunctionType(
+      ArgType_General, {ArgType_General, ArgType_Int32, ArgType_General}),
 };
 
 static constexpr ABIFunctionType MakeABIFunctionType(

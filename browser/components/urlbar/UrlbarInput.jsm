@@ -236,9 +236,10 @@ class UrlbarInput {
       this.window.addEventListener("draggableregionleftmousedown", this);
     }
     this.textbox.addEventListener("mousedown", this);
-    this._inputContainer.addEventListener("click", this);
 
-    this._searchModeIndicatorClose.addEventListener("click", this);
+    // This listener handles clicks from our children too, included the search mode
+    // indicator close button.
+    this._inputContainer.addEventListener("click", this);
 
     // This is used to detect commands launched from the panel, to avoid
     // recording abandonment events when the command causes a blur event.
@@ -1705,10 +1706,28 @@ class UrlbarInput {
     }
 
     this.searchMode = searchMode;
-    this._setValue(result.payload.query?.trimStart() || "", false);
+
+    // Set userTypedValue to the payload's query string so that it's properly
+    // restored when switching back to the current tab and across sessions.
+    let value = result.payload.query?.trimStart() || "";
+    this._setValue(value, false);
+    this.window.gBrowser.userTypedValue = value;
+    this.valueIsTyped = true;
+
     if (startQuery) {
       this.startQuery({ allowAutofill: false });
     }
+
+    // If the user highlights the tab-to-search onboarding result, never show it
+    // again.
+    if (
+      result.providerName == "TabToSearch" &&
+      result.payload.dynamicType &&
+      UrlbarPrefs.get("tabToSearch.onboard.oneInteraction")
+    ) {
+      UrlbarPrefs.set("tabToSearch.onboard.maxShown", 0);
+    }
+
     return true;
   }
 
@@ -2490,7 +2509,11 @@ class UrlbarInput {
             searchMode.entry = "topsites_urlbar";
             break;
           case "TabToSearch":
-            searchMode.entry = "tabtosearch";
+            if (result.payload.dynamicType) {
+              searchMode.entry = "tabtosearch_onboard";
+            } else {
+              searchMode.entry = "tabtosearch";
+            }
             break;
           default:
             searchMode.entry = "keywordoffer";
