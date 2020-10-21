@@ -93,8 +93,9 @@ nsresult ReadCompressedIndexDataValues(
 
 using IndexDataValuesAutoArray = AutoTArray<IndexDataValue, 32>;
 
+template <typename T>
 Result<IndexDataValuesAutoArray, nsresult> ReadCompressedIndexDataValues(
-    mozIStorageValueArray& aValues, uint32_t aColumnIndex);
+    T& aValues, uint32_t aColumnIndex);
 
 Result<std::tuple<IndexOrObjectStoreId, bool, Span<const uint8_t>>, nsresult>
 ReadCompressedIndexId(Span<const uint8_t> aData);
@@ -119,6 +120,9 @@ GetStructuredCloneReadInfoFromStatement(mozIStorageStatement* aStatement,
 Result<nsTArray<StructuredCloneFileParent>, nsresult>
 DeserializeStructuredCloneFiles(const FileManager& aFileManager,
                                 const nsAString& aText);
+
+nsresult ExecuteSimpleSQLSequence(mozIStorageConnection& aConnection,
+                                  Span<const nsLiteralCString> aSQLCommands);
 
 }  // namespace indexedDB
 }  // namespace dom

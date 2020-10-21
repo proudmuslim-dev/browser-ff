@@ -25,6 +25,7 @@
 #include "SafeRefPtr.h"
 #include "js/RootingAPI.h"
 #include "js/StructuredClone.h"
+#include "mozIStorageConnection.h"
 #include "mozIStorageStatement.h"
 #include "mozIStorageValueArray.h"
 #include "mozilla/Assertions.h"
@@ -632,12 +633,20 @@ nsresult ReadCompressedIndexDataValues(
                                                  &aOutIndexValues);
 }
 
+template <typename T>
 Result<IndexDataValuesAutoArray, nsresult> ReadCompressedIndexDataValues(
-    mozIStorageValueArray& aValues, uint32_t aColumnIndex) {
+    T& aValues, uint32_t aColumnIndex) {
   return ToResultInvoke<IndexDataValuesAutoArray>(
-      &ReadCompressedIndexDataValuesFromSource<mozIStorageValueArray>, aValues,
-      aColumnIndex);
+      &ReadCompressedIndexDataValuesFromSource<T>, aValues, aColumnIndex);
 }
+
+template Result<IndexDataValuesAutoArray, nsresult>
+ReadCompressedIndexDataValues<mozIStorageValueArray>(mozIStorageValueArray&,
+                                                     uint32_t);
+
+template Result<IndexDataValuesAutoArray, nsresult>
+ReadCompressedIndexDataValues<mozIStorageStatement>(mozIStorageStatement&,
+                                                    uint32_t);
 
 Result<std::tuple<IndexOrObjectStoreId, bool, Span<const uint8_t>>, nsresult>
 ReadCompressedIndexId(const Span<const uint8_t> aData) {
@@ -715,6 +724,18 @@ DeserializeStructuredCloneFiles(const FileManager& aFileManager,
   }
 
   return result;
+}
+
+nsresult ExecuteSimpleSQLSequence(mozIStorageConnection& aConnection,
+                                  Span<const nsLiteralCString> aSQLCommands) {
+  for (const auto& aSQLCommand : aSQLCommands) {
+    const auto extraInfo = quota::ScopedLogExtraInfo{
+        quota::ScopedLogExtraInfo::kTagQuery, aSQLCommand};
+
+    IDB_TRY(aConnection.ExecuteSimpleSQL(aSQLCommand));
+  }
+
+  return NS_OK;
 }
 
 }  // namespace mozilla::dom::indexedDB
