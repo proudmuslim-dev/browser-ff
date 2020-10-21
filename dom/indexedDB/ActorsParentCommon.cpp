@@ -35,7 +35,6 @@
 #include "mozilla/NullPrincipal.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ResultExtensions.h"
-#include "mozilla/SnappyUncompressInputStream.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryScalarEnums.h"
@@ -410,42 +409,29 @@ GetStructuredCloneReadInfoFromExternalBlob(uint64_t aIntData,
   const StructuredCloneFileParent& file = files[index];
   MOZ_ASSERT(file.Type() == StructuredCloneFileBase::eStructuredClone);
 
-  const nsCOMPtr<nsIFile> nativeFile = file.FileInfo().GetFileForFileInfo();
-  IDB_TRY(OkIf(nativeFile), Err(NS_ERROR_FAILURE));
-
-  // XXX NS_NewLocalFileInputStream does not follow the convention to place its
-  // output parameter last (it has optional parameters which makes that
-  // problematic), so we can't use ToResultInvoke, nor
-  // IDB_TRY_UNWRAP/IDB_TRY_INSPECT.
-  nsCOMPtr<nsIInputStream> fileInputStream;
-  IDB_TRY(
-      NS_NewLocalFileInputStream(getter_AddRefs(fileInputStream), nativeFile));
-
-  if (aMaybeKey) {
-    fileInputStream =
-        MakeRefPtr<quota::DecryptingInputStream<IndexedDBCipherStrategy>>(
-            WrapNotNull(std::move(fileInputStream)), kEncryptedStreamBlockSize,
-            *aMaybeKey);
-  }
-
-  const auto snappyInputStream =
-      MakeRefPtr<SnappyUncompressInputStream>(fileInputStream);
-
   auto data = JSStructuredCloneData{JS::StructuredCloneScope::DifferentProcess};
-  do {
-    char buffer[kFileCopyBufferSize];
 
-    IDB_TRY_INSPECT(
-        const uint32_t& numRead,
-        MOZ_TO_RESULT_INVOKE(snappyInputStream, Read, buffer, sizeof(buffer)));
+  {
+    const nsCOMPtr<nsIFile> nativeFile = file.FileInfo().GetFileForFileInfo();
+    IDB_TRY(OkIf(nativeFile), Err(NS_ERROR_FAILURE));
 
-    if (!numRead) {
-      break;
+    // XXX NS_NewLocalFileInputStream does not follow the convention to place
+    // its output parameter last (it has optional parameters which makes that
+    // problematic), so we can't use ToResultInvoke, nor
+    // IDB_TRY_UNWRAP/IDB_TRY_INSPECT.
+    nsCOMPtr<nsIInputStream> fileInputStream;
+    IDB_TRY(NS_NewLocalFileInputStream(getter_AddRefs(fileInputStream),
+                                       nativeFile));
+
+    if (aMaybeKey) {
+      fileInputStream =
+          MakeRefPtr<quota::DecryptingInputStream<IndexedDBCipherStrategy>>(
+              WrapNotNull(std::move(fileInputStream)),
+              kEncryptedStreamBlockSize, *aMaybeKey);
     }
 
-    IDB_TRY(OkIf(data.AppendBytes(buffer, numRead)),
-            Err(NS_ERROR_OUT_OF_MEMORY));
-  } while (true);
+    IDB_TRY(SnappyUncompressStructuredCloneData(*fileInputStream, data));
+  }
 
   return StructuredCloneReadInfoParent{std::move(data), std::move(files),
                                        false};

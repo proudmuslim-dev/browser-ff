@@ -2270,6 +2270,16 @@ class TransactionDatabaseOperationBase : public DatabaseOperationBase {
   // the transaction to be aborted.
   virtual bool SendFailureResult(nsresult aResultCode) = 0;
 
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  auto MakeAutoSavepointCleanupHandler(DatabaseConnection& aConnection) {
+    return [this, &aConnection](const auto) {
+      if (!aConnection.GetUpdateRefcountFunction()) {
+        mAssumingPreviousOperationFail = true;
+      }
+    };
+  }
+#endif
+
  private:
   void SendToConnectionPool();
 
@@ -5928,6 +5938,16 @@ nsresult DeleteFile(nsIFile& aFile, QuotaManager* const aQuotaManager,
   return NS_OK;
 }
 
+Result<nsCOMPtr<nsIFile>, nsresult> CloneFileAndAppend(
+    nsIFile& aDirectory, const nsAString& aPathElement) {
+  IDB_TRY_UNWRAP(auto resultFile, MOZ_TO_RESULT_INVOKE_TYPED(
+                                      nsCOMPtr<nsIFile>, aDirectory, Clone));
+
+  IDB_TRY(resultFile->Append(aPathElement));
+
+  return resultFile;
+}
+
 nsresult DeleteFile(nsIFile& aDirectory, const nsAString& aFilename,
                     QuotaManager* const aQuotaManager,
                     const PersistenceType aPersistenceType,
@@ -5936,16 +5956,7 @@ nsresult DeleteFile(nsIFile& aDirectory, const nsAString& aFilename,
   AssertIsOnIOThread();
   MOZ_ASSERT(!aFilename.IsEmpty());
 
-  nsCOMPtr<nsIFile> file;
-  nsresult rv = aDirectory.Clone(getter_AddRefs(file));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  rv = file->Append(aFilename);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY_INSPECT(const auto& file, CloneFileAndAppend(aDirectory, aFilename));
 
   return DeleteFile(*file, aQuotaManager, aPersistenceType, aGroupAndOrigin,
                     aIdempotent);
@@ -5962,18 +5973,9 @@ nsresult DeleteFilesNoQuota(nsIFile* aDirectory, const nsAString& aFilename) {
   DebugOnly<QuotaManager*> quotaManager = QuotaManager::Get();
   MOZ_ASSERT(!quotaManager->IsTemporaryStorageInitialized());
 
-  nsCOMPtr<nsIFile> file;
-  nsresult rv = aDirectory->Clone(getter_AddRefs(file));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY_INSPECT(const auto& file, CloneFileAndAppend(*aDirectory, aFilename));
 
-  rv = file->Append(aFilename);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  rv = file->Remove(true);
+  nsresult rv = file->Remove(true);
   if (rv == NS_ERROR_FILE_NOT_FOUND ||
       rv == NS_ERROR_FILE_TARGET_DOES_NOT_EXIST) {
     return NS_OK;
@@ -5994,11 +5996,10 @@ Result<nsCOMPtr<nsIFile>, nsresult> CreateMarkerFile(
   AssertIsOnIOThread();
   MOZ_ASSERT(!aDatabaseNameBase.IsEmpty());
 
-  IDB_TRY_UNWRAP(
-      auto markerFile,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, aBaseDirectory, Clone));
-
-  IDB_TRY(markerFile->Append(kIdbDeletionMarkerFilePrefix + aDatabaseNameBase));
+  IDB_TRY_INSPECT(
+      const auto& markerFile,
+      CloneFileAndAppend(aBaseDirectory,
+                         kIdbDeletionMarkerFilePrefix + aDatabaseNameBase));
 
   IDB_TRY(
       MOZ_TO_RESULT_INVOKE(markerFile, Create, nsIFile::NORMAL_FILE_TYPE, 0644)
@@ -6108,13 +6109,11 @@ nsresult RemoveDatabaseFilesAndDirectory(nsIFile& aBaseDirectory,
                      aQuotaManager, aPersistenceType, aGroupAndOrigin,
                      Idempotency::Yes));
 
+  // The files directory counts towards quota.
   IDB_TRY_INSPECT(
       const auto& fmDirectory,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, aBaseDirectory, Clone));
-
-  // The files directory counts towards quota.
-  IDB_TRY(fmDirectory->Append(aDatabaseFilenameBase +
-                              kFileManagerDirectoryNameSuffix));
+      CloneFileAndAppend(aBaseDirectory, aDatabaseFilenameBase +
+                                             kFileManagerDirectoryNameSuffix));
 
   IDB_TRY_INSPECT(const bool& exists,
                   MOZ_TO_RESULT_INVOKE(fmDirectory, Exists));
@@ -7966,21 +7965,15 @@ nsresult DatabaseConnection::UpdateRefcountFunction::ProcessValue(
   AUTO_PROFILER_LABEL(
       "DatabaseConnection::UpdateRefcountFunction::ProcessValue", DOM);
 
-  int32_t type;
-  nsresult rv = aValues->GetTypeOfIndex(aIndex, &type);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY_INSPECT(const int32_t& type,
+                  MOZ_TO_RESULT_INVOKE(aValues, GetTypeOfIndex, aIndex));
 
   if (type == mozIStorageValueArray::VALUE_TYPE_NULL) {
     return NS_OK;
   }
 
-  nsString ids;
-  rv = aValues->GetString(aIndex, ids);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY_INSPECT(const auto& ids, MOZ_TO_RESULT_INVOKE_TYPED(
+                                       nsString, aValues, GetString, aIndex));
 
   IDB_TRY_INSPECT(const auto& files,
                   DeserializeStructuredCloneFiles(mFileManager, ids));
@@ -12545,11 +12538,8 @@ nsresult FileManager::Init(nsIFile* aDirectory,
     mDirectoryPath.init(std::move(path));
   }
 
-  IDB_TRY_INSPECT(
-      const auto& journalDirectory,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, aDirectory, Clone));
-
-  IDB_TRY(journalDirectory->Append(kJournalDirectoryName));
+  IDB_TRY_INSPECT(const auto& journalDirectory,
+                  CloneFileAndAppend(*aDirectory, kJournalDirectoryName));
 
   // We don't care if it doesn't exist at all, but if it does exist, make sure
   // it's a directory.
@@ -12665,14 +12655,7 @@ nsCOMPtr<nsIFile> FileManager::GetFileForId(nsIFile* aDirectory, int64_t aId) {
   MOZ_ASSERT(aDirectory);
   MOZ_ASSERT(aId > 0);
 
-  IDB_TRY_UNWRAP(
-      auto file,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, aDirectory, Clone),
-      nullptr);
-
-  IDB_TRY(file->Append(IntToString(aId)), nullptr);
-
-  return file;
+  IDB_TRY_RETURN(CloneFileAndAppend(*aDirectory, IntToString(aId)), nullptr);
 }
 
 // static
@@ -12713,11 +12696,8 @@ nsresult FileManager::InitDirectory(nsIFile& aDirectory, nsIFile& aDatabaseFile,
     IDB_TRY(OkIf(isDirectory), NS_ERROR_FAILURE);
   }
 
-  IDB_TRY_INSPECT(
-      const auto& journalDirectory,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, aDirectory, Clone));
-
-  IDB_TRY(journalDirectory->Append(kJournalDirectoryName));
+  IDB_TRY_INSPECT(const auto& journalDirectory,
+                  CloneFileAndAppend(aDirectory, kJournalDirectoryName));
 
   IDB_TRY_INSPECT(const bool& exists,
                   MOZ_TO_RESULT_INVOKE(journalDirectory, Exists));
@@ -12796,10 +12776,7 @@ nsresult FileManager::InitDirectory(nsIFile& aDirectory, nsIFile& aDatabaseFile,
 
             if (!flag) {
               IDB_TRY_INSPECT(const auto& file,
-                              MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>,
-                                                         aDirectory, Clone));
-
-              IDB_TRY(file->Append(name));
+                              CloneFileAndAppend(aDirectory, name));
 
               if (NS_FAILED(file->Remove(false))) {
                 NS_WARNING("Failed to remove orphaned file!");
@@ -12807,10 +12784,7 @@ nsresult FileManager::InitDirectory(nsIFile& aDirectory, nsIFile& aDatabaseFile,
             }
 
             IDB_TRY_INSPECT(const auto& journalFile,
-                            MOZ_TO_RESULT_INVOKE_TYPED(
-                                nsCOMPtr<nsIFile>, journalDirectory, Clone));
-
-            IDB_TRY(journalFile->Append(name));
+                            CloneFileAndAppend(*journalDirectory, name));
 
             if (NS_FAILED(journalFile->Remove(false))) {
               NS_WARNING("Failed to remove journal file!");
@@ -13056,35 +13030,19 @@ nsresult QuotaClient::UpgradeStorageFrom1_0To2_0(nsIFile* aDirectory) {
     }
 
     // We do have a database that uses this subdir so we should rename it now.
-    nsCOMPtr<nsIFile> subdir;
-    nsresult rv = aDirectory->Clone(getter_AddRefs(subdir));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    rv = subdir->Append(subdirName);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY_INSPECT(const auto& subdir,
+                    CloneFileAndAppend(*aDirectory, subdirName));
 
     DebugOnly<bool> isDirectory;
     MOZ_ASSERT(NS_SUCCEEDED(subdir->IsDirectory(&isDirectory)));
     MOZ_ASSERT(isDirectory);
 
     // Check if the subdir with suffix already exists before renaming.
-    nsCOMPtr<nsIFile> subdirWithSuffix;
-    rv = aDirectory->Clone(getter_AddRefs(subdirWithSuffix));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    rv = subdirWithSuffix->Append(subdirNameWithSuffix);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY_INSPECT(const auto& subdirWithSuffix,
+                    CloneFileAndAppend(*aDirectory, subdirNameWithSuffix));
 
     bool exists;
-    rv = subdirWithSuffix->Exists(&exists);
+    nsresult rv = subdirWithSuffix->Exists(&exists);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -13281,16 +13239,12 @@ nsresult QuotaClient::GetUsageForOriginInternal(
 
     IDB_TRY_INSPECT(
         const auto& fmDirectory,
-        MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, directory, Clone));
-
-    IDB_TRY(fmDirectory->Append(databaseFilename +
-                                kFileManagerDirectoryNameSuffix));
+        CloneFileAndAppend(*directory,
+                           databaseFilename + kFileManagerDirectoryNameSuffix));
 
     IDB_TRY_INSPECT(
         const auto& databaseFile,
-        MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, directory, Clone));
-
-    IDB_TRY(databaseFile->Append(databaseFilename + kSQLiteSuffix));
+        CloneFileAndAppend(*directory, databaseFilename + kSQLiteSuffix));
 
     if (aInitializing) {
       IDB_TRY(FileManager::InitDirectory(*fmDirectory, *databaseFile,
@@ -13309,11 +13263,9 @@ nsresult QuotaClient::GetUsageForOriginInternal(
       }
 
       {
-        IDB_TRY_INSPECT(
-            const auto& walFile,
-            MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, directory, Clone));
-
-        IDB_TRY(walFile->Append(databaseFilename + kSQLiteWALSuffix));
+        IDB_TRY_INSPECT(const auto& walFile,
+                        CloneFileAndAppend(
+                            *directory, databaseFilename + kSQLiteWALSuffix));
 
         IDB_TRY_INSPECT(const int64_t& walFileSize,
                         MOZ_TO_RESULT_INVOKE(walFile, GetFileSize)
@@ -14037,10 +13989,8 @@ nsresult Maintenance::DirectoryWork() {
 
     IDB_TRY_INSPECT(
         const auto& persistenceDir,
-        MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, storageDir, Clone));
-
-    IDB_TRY(
-        persistenceDir->Append(NS_ConvertASCIItoUTF16(persistenceTypeString)));
+        CloneFileAndAppend(*storageDir,
+                           NS_ConvertASCIItoUTF16(persistenceTypeString)));
 
     {
       IDB_TRY_INSPECT(const bool& exists,
@@ -14125,11 +14075,8 @@ nsresult Maintenance::DirectoryWork() {
             MOZ_ASSERT(!created);
           }
 
-          IDB_TRY_INSPECT(
-              const auto& idbDir,
-              MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, originDir, Clone));
-
-          IDB_TRY(idbDir->Append(idbDirName));
+          IDB_TRY_INSPECT(const auto& idbDir,
+                          CloneFileAndAppend(*originDir, idbDirName));
 
           IDB_TRY_INSPECT(const bool& exists,
                           MOZ_TO_RESULT_INVOKE(idbDir, Exists));
@@ -16529,10 +16476,8 @@ nsresult OpenDatabaseOp::DoDatabaseWork() {
 
   IDB_TRY_INSPECT(
       const auto& markerFile,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, dbDirectory, Clone));
-
-  IDB_TRY(
-      markerFile->Append(kIdbDeletionMarkerFilePrefix + databaseFilenameBase));
+      CloneFileAndAppend(*dbDirectory,
+                         kIdbDeletionMarkerFilePrefix + databaseFilenameBase));
 
   IDB_TRY_INSPECT(const bool& exists, MOZ_TO_RESULT_INVOKE(markerFile, Exists));
 
@@ -16548,9 +16493,7 @@ nsresult OpenDatabaseOp::DoDatabaseWork() {
 
   IDB_TRY_INSPECT(
       const auto& dbFile,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, dbDirectory, Clone));
-
-  IDB_TRY(dbFile->Append(databaseFilenameBase + kSQLiteSuffix));
+      CloneFileAndAppend(*dbDirectory, databaseFilenameBase + kSQLiteSuffix));
 
   mTelemetryId = TelemetryIdForFile(dbFile);
 
@@ -16565,10 +16508,8 @@ nsresult OpenDatabaseOp::DoDatabaseWork() {
 
   IDB_TRY_INSPECT(
       const auto& fmDirectory,
-      MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<nsIFile>, dbDirectory, Clone));
-
-  IDB_TRY(fmDirectory->Append(databaseFilenameBase +
-                              kFileManagerDirectoryNameSuffix));
+      CloneFileAndAppend(*dbDirectory, databaseFilenameBase +
+                                           kFileManagerDirectoryNameSuffix));
 
   IDB_TRY_UNWRAP(NotNull<nsCOMPtr<mozIStorageConnection>> connection,
                  CreateStorageConnection(*dbFile, *fmDirectory, databaseName,
@@ -17690,16 +17631,9 @@ nsresult DeleteDatabaseOp::DoDatabaseWork() {
 
   mDatabaseFilenameBase = GetDatabaseFilenameBase(databaseName);
 
-  nsCOMPtr<nsIFile> dbFile;
-  rv = directory->Clone(getter_AddRefs(dbFile));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  rv = dbFile->Append(mDatabaseFilenameBase + kSQLiteSuffix);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY_INSPECT(
+      const auto& dbFile,
+      CloneFileAndAppend(*directory, mDatabaseFilenameBase + kSQLiteSuffix));
 
 #ifdef DEBUG
   nsString databaseFilePath;
@@ -18770,55 +18704,34 @@ nsresult CreateObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   // The parameter names are not used, parameters are bound by index only
   // locally in the same function.
-  rv = aConnection->ExecuteCachedStatement(
+  IDB_TRY(aConnection->ExecuteCachedStatement(
       "INSERT INTO object_store (id, auto_increment, name, key_path) "
       "VALUES (:id, :auto_increment, :name, :key_path);"_ns,
-      [this](mozIStorageStatement& stmt) {
-        nsresult rv = stmt.BindInt64ByIndex(0, mMetadata.id());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+      [this](mozIStorageStatement& stmt) -> Result<Ok, nsresult> {
+        IDB_TRY(stmt.BindInt64ByIndex(0, mMetadata.id()));
 
-        rv = stmt.BindInt32ByIndex(1, mMetadata.autoIncrement() ? 1 : 0);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt32ByIndex(1, mMetadata.autoIncrement() ? 1 : 0));
 
-        rv = stmt.BindStringByIndex(2, mMetadata.name());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindStringByIndex(2, mMetadata.name()));
 
         if (mMetadata.keyPath().IsValid()) {
-          nsAutoString keyPathSerialization;
-          mMetadata.keyPath().SerializeToString(keyPathSerialization);
-
-          rv = stmt.BindStringByIndex(3, keyPathSerialization);
+          IDB_TRY(stmt.BindStringByIndex(
+              3, mMetadata.keyPath().SerializeToString()));
         } else {
-          rv = stmt.BindNullByIndex(3);
+          IDB_TRY(stmt.BindNullByIndex(3));
         }
 
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
-
-        return NS_OK;
-      });
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+        return Ok{};
+      }));
 
 #ifdef DEBUG
   {
@@ -18829,10 +18742,7 @@ nsresult CreateObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection) {
   }
 #endif
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   return NS_OK;
 }
@@ -18880,113 +18790,64 @@ nsresult DeleteObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   if (mIsLastObjectStore) {
     // We can just delete everything if this is the last object store.
-    rv = aConnection->ExecuteCachedStatement("DELETE FROM index_data;"_ns);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(aConnection->ExecuteCachedStatement("DELETE FROM index_data;"_ns));
 
-    rv = aConnection->ExecuteCachedStatement(
-        "DELETE FROM unique_index_data;"_ns);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(aConnection->ExecuteCachedStatement(
+        "DELETE FROM unique_index_data;"_ns));
 
-    rv = aConnection->ExecuteCachedStatement("DELETE FROM object_data;"_ns);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(aConnection->ExecuteCachedStatement("DELETE FROM object_data;"_ns));
 
-    rv = aConnection->ExecuteCachedStatement(
-        "DELETE FROM object_store_index;"_ns);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(aConnection->ExecuteCachedStatement(
+        "DELETE FROM object_store_index;"_ns));
 
-    rv = aConnection->ExecuteCachedStatement("DELETE FROM object_store;"_ns);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(
+        aConnection->ExecuteCachedStatement("DELETE FROM object_store;"_ns));
   } else {
     IDB_TRY_INSPECT(
         const bool& hasIndexes,
         ObjectStoreHasIndexes(*aConnection, mMetadata->mCommonMetadata.id()));
 
+    const auto bindObjectStoreIdToFirstParameter =
+        [this](mozIStorageStatement& stmt) -> nsresult {
+      IDB_TRY(stmt.BindInt64ByIndex(0, mMetadata->mCommonMetadata.id()));
+
+      return NS_OK;
+    };
+
+    // The parameter name :object_store_id in the SQL statements below is not
+    // used for binding, parameters are bound by index only locally by
+    // bindObjectStoreIdToFirstParameter.
     if (hasIndexes) {
-      rv = DeleteObjectStoreDataTableRowsWithIndexes(
-          aConnection, mMetadata->mCommonMetadata.id(), Nothing());
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+      IDB_TRY(DeleteObjectStoreDataTableRowsWithIndexes(
+          aConnection, mMetadata->mCommonMetadata.id(), Nothing()));
 
       // Now clean up the object store index table.
-      // The parameter names are not used, parameters are bound by index only
-      // locally in the same function.
-      rv = aConnection->ExecuteCachedStatement(
+      IDB_TRY(aConnection->ExecuteCachedStatement(
           "DELETE FROM object_store_index "
           "WHERE object_store_id = :object_store_id;"_ns,
-          [this](mozIStorageStatement& stmt) {
-            nsresult rv =
-                stmt.BindInt64ByIndex(0, mMetadata->mCommonMetadata.id());
-            if (NS_WARN_IF(NS_FAILED(rv))) {
-              return rv;
-            }
-
-            return NS_OK;
-          });
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+          bindObjectStoreIdToFirstParameter));
     } else {
       // We only have to worry about object data if this object store has no
       // indexes.
-      // The parameter names are not used, parameters are bound by index only
-      // locally in the same function.
-      rv = aConnection->ExecuteCachedStatement(
+      IDB_TRY(aConnection->ExecuteCachedStatement(
           "DELETE FROM object_data "
           "WHERE object_store_id = :object_store_id;"_ns,
-          [this](mozIStorageStatement& stmt) {
-            nsresult rv =
-                stmt.BindInt64ByIndex(0, mMetadata->mCommonMetadata.id());
-            if (NS_WARN_IF(NS_FAILED(rv))) {
-              return rv;
-            }
-
-            return NS_OK;
-          });
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+          bindObjectStoreIdToFirstParameter));
     }
 
-    // The parameter names are not used, parameters are bound by index only
-    // locally in the same function.
-    rv = aConnection->ExecuteCachedStatement(
-        "DELETE FROM object_store "
-        "WHERE id = :object_store_id;"_ns,
-        [this](mozIStorageStatement& stmt) {
-          nsresult rv =
-              stmt.BindInt64ByIndex(0, mMetadata->mCommonMetadata.id());
-          if (NS_WARN_IF(NS_FAILED(rv))) {
-            return rv;
-          }
-
-          return NS_OK;
-        });
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(
+        aConnection->ExecuteCachedStatement("DELETE FROM object_store "
+                                            "WHERE id = :object_store_id;"_ns,
+                                            bindObjectStoreIdToFirstParameter));
 
 #ifdef DEBUG
     {
@@ -18999,10 +18860,7 @@ nsresult DeleteObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
   }
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   if (mMetadata->mCommonMetadata.autoIncrement()) {
     Transaction().ForgetModifiedAutoIncrementObjectStore(mMetadata);
@@ -19042,43 +18900,28 @@ nsresult RenameObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   // The parameter names are not used, parameters are bound by index only
   // locally in the same function.
-  rv = aConnection->ExecuteCachedStatement(
+  IDB_TRY(aConnection->ExecuteCachedStatement(
       "UPDATE object_store "
       "SET name = :name "
       "WHERE id = :id;"_ns,
-      [this](mozIStorageStatement& stmt) {
-        nsresult rv = stmt.BindStringByIndex(0, mNewName);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+      [this](mozIStorageStatement& stmt) -> nsresult {
+        IDB_TRY(stmt.BindStringByIndex(0, mNewName));
 
-        rv = stmt.BindInt64ByIndex(1, mId);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt64ByIndex(1, mId));
 
         return NS_OK;
-      });
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+      }));
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   return NS_OK;
 }
@@ -19221,74 +19064,42 @@ nsresult CreateIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   // The parameter names are not used, parameters are bound by index only
   // locally in the same function.
-  rv = aConnection->ExecuteCachedStatement(
+  IDB_TRY(aConnection->ExecuteCachedStatement(
       "INSERT INTO object_store_index (id, name, key_path, unique_index, "
       "multientry, object_store_id, locale, "
       "is_auto_locale) "
       "VALUES (:id, :name, :key_path, :unique, :multientry, "
       ":object_store_id, :locale, :is_auto_locale)"_ns,
-      [this](mozIStorageStatement& stmt) {
-        nsresult rv = stmt.BindInt64ByIndex(0, mMetadata.id());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+      [this](mozIStorageStatement& stmt) -> nsresult {
+        IDB_TRY(stmt.BindInt64ByIndex(0, mMetadata.id()));
 
-        rv = stmt.BindStringByIndex(1, mMetadata.name());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindStringByIndex(1, mMetadata.name()));
 
-        nsAutoString keyPathSerialization;
-        mMetadata.keyPath().SerializeToString(keyPathSerialization);
-        rv = stmt.BindStringByIndex(2, keyPathSerialization);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(
+            stmt.BindStringByIndex(2, mMetadata.keyPath().SerializeToString()));
 
-        rv = stmt.BindInt32ByIndex(3, mMetadata.unique() ? 1 : 0);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt32ByIndex(3, mMetadata.unique() ? 1 : 0));
 
-        rv = stmt.BindInt32ByIndex(4, mMetadata.multiEntry() ? 1 : 0);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt32ByIndex(4, mMetadata.multiEntry() ? 1 : 0));
+        IDB_TRY(stmt.BindInt64ByIndex(5, mObjectStoreId));
 
-        rv = stmt.BindInt64ByIndex(5, mObjectStoreId);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(mMetadata.locale().IsEmpty()
+                    ? stmt.BindNullByIndex(6)
+                    : stmt.BindUTF8StringByIndex(6, mMetadata.locale()));
 
-        rv = mMetadata.locale().IsEmpty()
-                 ? stmt.BindNullByIndex(6)
-                 : stmt.BindUTF8StringByIndex(6, mMetadata.locale());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
-
-        rv = stmt.BindInt32ByIndex(7, mMetadata.autoLocale());
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt32ByIndex(7, mMetadata.autoLocale()));
 
         return NS_OK;
-      });
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+      }));
 
 #ifdef DEBUG
   {
@@ -19299,15 +19110,9 @@ nsresult CreateIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
   }
 #endif
 
-  rv = InsertDataFromObjectStore(aConnection);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(InsertDataFromObjectStore(aConnection));
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   return NS_OK;
 }
@@ -19620,15 +19425,12 @@ nsresult DeleteIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
   AUTO_PROFILER_LABEL("DeleteIndexOp::DoDatabaseWork", DOM);
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   // mozStorage warns that these statements trigger a sort operation but we
   // don't care because this is a very rare call and we expect it to be slow.
@@ -19678,17 +19480,11 @@ nsresult DeleteIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
                            kStmtParamNameObjectStoreId +
                            " ORDER BY index_data.object_data_key ASC;"_ns)));
 
-  rv = selectStmt->BindInt64ByName(kStmtParamNameIndexId, mIndexId);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(selectStmt->BindInt64ByName(kStmtParamNameIndexId, mIndexId));
 
   if (!mUnique || !mIsLastIndex) {
-    rv = selectStmt->BindInt64ByName(kStmtParamNameObjectStoreId,
-                                     mObjectStoreId);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(selectStmt->BindInt64ByName(kStmtParamNameObjectStoreId,
+                                        mObjectStoreId));
   }
 
   Key lastObjectStoreKey;
@@ -19785,27 +19581,18 @@ nsresult DeleteIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
   if (!lastObjectStoreKey.IsUnset()) {
     MOZ_ASSERT_IF(!mIsLastIndex, !lastIndexValues.IsEmpty());
 
-    rv = RemoveReferencesToIndex(aConnection, lastObjectStoreKey,
-                                 lastIndexValues);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+    IDB_TRY(RemoveReferencesToIndex(aConnection, lastObjectStoreKey,
+                                    lastIndexValues));
   }
 
-  rv = aConnection->ExecuteCachedStatement(
+  IDB_TRY(aConnection->ExecuteCachedStatement(
       "DELETE FROM object_store_index "
       "WHERE id = :index_id;"_ns,
-      [this](mozIStorageStatement& deleteStmt) {
-        nsresult rv = deleteStmt.BindInt64ByIndex(0, mIndexId);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+      [this](mozIStorageStatement& deleteStmt) -> nsresult {
+        IDB_TRY(deleteStmt.BindInt64ByIndex(0, mIndexId));
 
         return NS_OK;
-      });
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+      }));
 
 #ifdef DEBUG
   {
@@ -19816,10 +19603,7 @@ nsresult DeleteIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
   }
 #endif
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   return NS_OK;
 }
@@ -19861,43 +19645,28 @@ nsresult RenameIndexOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 #endif
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   // The parameter names are not used, parameters are bound by index only
   // locally in the same function.
-  rv = aConnection->ExecuteCachedStatement(
+  IDB_TRY(aConnection->ExecuteCachedStatement(
       "UPDATE object_store_index "
       "SET name = :name "
       "WHERE id = :id;"_ns,
-      [this](mozIStorageStatement& stmt) {
-        nsresult rv = stmt.BindStringByIndex(0, mNewName);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+      [this](mozIStorageStatement& stmt) -> nsresult {
+        IDB_TRY(stmt.BindStringByIndex(0, mNewName));
 
-        rv = stmt.BindInt64ByIndex(1, mIndexId);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return rv;
-        }
+        IDB_TRY(stmt.BindInt64ByIndex(1, mIndexId));
 
         return NS_OK;
-      });
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+      }));
 
-  rv = autoSave.Commit();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  IDB_TRY(autoSave.Commit());
 
   return NS_OK;
 }
@@ -20243,11 +20012,7 @@ nsresult ObjectStoreAddOrPutRequestOp::DoDatabaseWork(
   IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
               ,
-          QM_PROPAGATE, ([this, aConnection](const auto) {
-            if (!aConnection->GetUpdateRefcountFunction()) {
-              mAssumingPreviousOperationFail = true;
-            }
-          })
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
   );
 
@@ -20859,20 +20624,18 @@ nsresult ObjectStoreDeleteRequestOp::DoDatabaseWork(
   AUTO_PROFILER_LABEL("ObjectStoreDeleteRequestOp::DoDatabaseWork", DOM);
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   IDB_TRY_INSPECT(const bool& objectStoreHasIndexes,
                   ObjectStoreHasIndexes(*aConnection, mParams.objectStoreId(),
                                         mObjectStoreMayHaveIndexes));
 
+  nsresult rv;
   if (objectStoreHasIndexes) {
     rv = DeleteObjectStoreDataTableRowsWithIndexes(
         aConnection, mParams.objectStoreId(), Some(mParams.keyRange()));
@@ -20937,15 +20700,12 @@ nsresult ObjectStoreClearRequestOp::DoDatabaseWork(
   AUTO_PROFILER_LABEL("ObjectStoreClearRequestOp::DoDatabaseWork", DOM);
 
   DatabaseConnection::AutoSavepoint autoSave;
-  nsresult rv = autoSave.Start(Transaction());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  IDB_TRY(autoSave.Start(Transaction())
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    if (!aConnection->GetUpdateRefcountFunction()) {
-      mAssumingPreviousOperationFail = true;
-    }
+              ,
+          QM_PROPAGATE, MakeAutoSavepointCleanupHandler(*aConnection)
 #endif
-    return rv;
-  }
+  );
 
   IDB_TRY_INSPECT(const bool& objectStoreHasIndexes,
                   ObjectStoreHasIndexes(*aConnection, mParams.objectStoreId(),
@@ -20953,21 +20713,21 @@ nsresult ObjectStoreClearRequestOp::DoDatabaseWork(
 
   // The parameter names are not used, parameters are bound by index only
   // locally in the same function.
-  rv = objectStoreHasIndexes
-           ? DeleteObjectStoreDataTableRowsWithIndexes(
-                 aConnection, mParams.objectStoreId(), Nothing())
-           : aConnection->ExecuteCachedStatement(
-                 "DELETE FROM object_data "
-                 "WHERE object_store_id = :object_store_id;"_ns,
-                 [this](mozIStorageStatement& stmt) {
-                   nsresult rv =
-                       stmt.BindInt64ByIndex(0, mParams.objectStoreId());
-                   if (NS_WARN_IF(NS_FAILED(rv))) {
-                     return rv;
-                   }
+  nsresult rv = objectStoreHasIndexes
+                    ? DeleteObjectStoreDataTableRowsWithIndexes(
+                          aConnection, mParams.objectStoreId(), Nothing())
+                    : aConnection->ExecuteCachedStatement(
+                          "DELETE FROM object_data "
+                          "WHERE object_store_id = :object_store_id;"_ns,
+                          [this](mozIStorageStatement& stmt) {
+                            nsresult rv = stmt.BindInt64ByIndex(
+                                0, mParams.objectStoreId());
+                            if (NS_WARN_IF(NS_FAILED(rv))) {
+                              return rv;
+                            }
 
-                   return NS_OK;
-                 });
+                            return NS_OK;
+                          });
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }

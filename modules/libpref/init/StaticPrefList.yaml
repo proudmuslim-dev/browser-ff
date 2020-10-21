@@ -2036,24 +2036,6 @@
   value: false
   mirror: always
 
-# Is support for InputEvent.data enabled?
-- name: dom.inputevent.data.enabled
-  type: bool
-  value: true
-  mirror: always
-
-# Is support for InputEvent.dataTransfer enabled?
-- name: dom.inputevent.datatransfer.enabled
-  type: bool
-  value: true
-  mirror: always
-
-# Is support for InputEvent.inputType enabled?
-- name: dom.inputevent.inputtype.enabled
-  type: bool
-  value: true
-  mirror: always
-
 # Whether to allow or disallow web apps to cancel `beforeinput` events caused
 # by MozEditableElement#setUserInput() which is used by autocomplete, autofill
 # and password manager.
@@ -6625,7 +6607,7 @@
 # See https://github.com/w3c/csswg-drafts/issues/3264
 - name: layout.css.is-and-where-better-error-recovery.enabled
   type: RelaxedAtomicBool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
   rust: true
 
@@ -6828,6 +6810,19 @@
 #else
   value: false
 #endif
+
+# Whether or not to pass AUDCLNT_STREAMOPTIONS_RAW when initializing audio
+# streams when using WASAPI.
+# 0 - don't use RAW streams
+# 1 - use RAW streams for input streams only
+# 2 - use RAW streams for output streams only
+# 3 - use RAW streams for input and output streams
+#if defined (XP_WIN)
+- name: media.cubeb.wasapi-raw
+  type: RelaxedAtomicUint32
+  mirror: always
+  value: 1
+#endif // XP_WIN
 
 # ClockDrift desired buffering in milliseconds
 - name: media.clockdrift.buffering
