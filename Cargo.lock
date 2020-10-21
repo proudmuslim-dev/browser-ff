@@ -1950,6 +1950,8 @@ dependencies = [
  "fog-gtest",
  "gecko-fuzz-targets",
  "gkrust-shared",
+ "l10nregistry-ffi-gtest",
+ "moz_task-gtest",
  "mozglue-static",
  "mp4parse-gtest",
  "nsstring-gtest",
@@ -1988,6 +1990,7 @@ dependencies = [
  "http_sfv",
  "jsrust_shared",
  "kvstore",
+ "l10nregistry-ffi",
  "lmdb-rkv-sys",
  "log",
  "mapped_hyph",
@@ -2606,6 +2609,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "l10nregistry-ffi"
+version = "0.1.0"
+dependencies = [
+ "futures-channel",
+ "libc",
+ "nserror",
+ "nsstring",
+]
+
+[[package]]
+name = "l10nregistry-ffi-gtest"
+version = "0.1.0"
+dependencies = [
+ "l10nregistry-ffi",
+ "moz_task",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3058,10 +3079,20 @@ checksum = "20c82a57087fd5990d7122dbff1607c3b20c3d2958e9d9ad9765aab415e2c91c"
 name = "moz_task"
 version = "0.1.0"
 dependencies = [
+ "cstr",
+ "futures-task",
  "libc",
  "nserror",
  "nsstring",
+ "thiserror",
  "xpcom",
+]
+
+[[package]]
+name = "moz_task-gtest"
+version = "0.1.0"
+dependencies = [
+ "moz_task",
 ]
 
 [[package]]

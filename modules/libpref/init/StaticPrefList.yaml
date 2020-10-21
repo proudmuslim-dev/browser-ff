@@ -7069,6 +7069,59 @@
   value: 5000
   mirror: always
 
+#ifdef MOZ_FFMPEG
+- name: media.rdd-ffmpeg.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+#endif
+
+#ifdef MOZ_FFVPX
+- name: media.rdd-ffvpx.enabled
+  type: RelaxedAtomicBool
+#if defined(XP_WIN) && !defined(_ARM64_)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_MACOSX)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_LINUX) && !defined(ANDROID)
+  value: @IS_NIGHTLY_BUILD@
+#else
+  value: false
+#endif
+  mirror: always
+#endif
+
+#ifdef MOZ_WMF
+- name: media.rdd-wmf.enabled
+  type: RelaxedAtomicBool
+#if defined(XP_WIN) && !defined(_ARM64_)
+  value: @IS_NIGHTLY_BUILD@
+#else
+  value: false
+#endif
+  mirror: always
+#endif
+
+#ifdef MOZ_APPLEMEDIA
+- name: media.rdd-applemedia.enabled
+  type: RelaxedAtomicBool
+  value: @IS_NIGHTLY_BUILD@
+  mirror: always
+#endif
+
+- name: media.rdd-theora.enabled
+  type: RelaxedAtomicBool
+#if defined(XP_LINUX) && !defined(ANDROID)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_WIN) && !defined(_ARM64_)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_MACOSX)
+  value: @IS_NIGHTLY_BUILD@
+#else
+  value: false
+#endif
+  mirror: always
+
 - name: media.rdd-vorbis.enabled
   type: RelaxedAtomicBool
 #if defined(XP_LINUX) && !defined(ANDROID)
@@ -7077,6 +7130,19 @@
   value: true
 #elif defined(XP_WIN) && !defined(_ARM64_)
   value: true
+#else
+  value: false
+#endif
+  mirror: always
+
+- name: media.rdd-vpx.enabled
+  type: RelaxedAtomicBool
+#if defined(XP_LINUX) && !defined(ANDROID)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_WIN) && !defined(_ARM64_)
+  value: @IS_NIGHTLY_BUILD@
+#elif defined(XP_MACOSX)
+  value: @IS_NIGHTLY_BUILD@
 #else
   value: false
 #endif
@@ -9285,7 +9351,7 @@
   # true means that win32k system calls are not permitted.
 -   name: security.sandbox.rdd.win32k-disable
     type: RelaxedAtomicBool
-    value: true
+    value: false
     mirror: always
 
   # Note: win32k is currently _not_ disabled for GMP due to intermittent test
