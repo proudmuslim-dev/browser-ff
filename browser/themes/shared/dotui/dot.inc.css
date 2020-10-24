@@ -4,11 +4,6 @@
 
 %include panelui.inc.css
 
-:root {
-    --tabs-border-color: transparent !important;
-    --toolbarbutton-border-radius: 6px !important;
-}
-
 #urlbar {
     --urlbar-height: 34px !important;
 }
@@ -55,10 +50,6 @@
     padding-top: 2px !important;
 }
 
-#titlebar {
-    height: 36px;
-}
-
 .tab-text {
     font-size: 12px;
 }
@@ -68,7 +59,7 @@
 }
 
 #urlbar > #urlbar-background {
-    border-color: transparent !important;
+    border-color: var(--lwt-toolbar-field-background-color) !important;
 }
 
 #urlbar:not([focused="true"]) > #urlbar-background {
