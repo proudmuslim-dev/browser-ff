@@ -2501,6 +2501,7 @@ pref("first-startup.timeout", 30000);
 // GENERAL
 pref("general.autoScroll", true);
 pref("browser.preferences.experimental.hidden", true);
+pref("browser.preferences.experimental", false);
 
 // NETWORK
 pref("dom.security.https_only_mode", true); // Enable HTTPS-only mode
