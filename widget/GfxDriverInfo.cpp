@@ -457,11 +457,6 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       break;
     case DeviceFamily::IntelRolloutWebRender:
 #ifdef EARLY_BETA_OR_EARLIER
-      // sandybridge gen6 gt1
-      APPEND_DEVICE(0x0102);
-      APPEND_DEVICE(0x0106);
-      APPEND_DEVICE(0x010a);
-
       // cherryview
       APPEND_DEVICE(0x22b0);
       APPEND_DEVICE(0x22b1);
@@ -471,6 +466,11 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
 
       [[fallthrough]];
     case DeviceFamily::IntelModernRolloutWebRender:
+      // sandybridge gen6 gt1
+      APPEND_DEVICE(0x0102);
+      APPEND_DEVICE(0x0106);
+      APPEND_DEVICE(0x010a);
+
       // sandybridge gen6 gt2
       APPEND_DEVICE(0x0112);
       APPEND_DEVICE(0x0116);
@@ -705,12 +705,16 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_RANGE(0x9640, 0x964f);
       APPEND_RANGE(0x6720, 0x677f);
 
-#ifdef EARLY_BETA_OR_EARLIER
       // Stoney
       APPEND_DEVICE(0x98e4);
 
+#ifdef EARLY_BETA_OR_EARLIER
       // Carrizo
       APPEND_RANGE(0x9870, 0x9877);
+
+      // R700
+      APPEND_RANGE(0x9440, 0x949f);
+      APPEND_RANGE(0x94a0, 0x94b9);
 #endif
 
       break;

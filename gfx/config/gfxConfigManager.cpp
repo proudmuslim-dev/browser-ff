@@ -176,11 +176,20 @@ bool gfxConfigManager::ConfigureWebRenderQualified() {
                                      "INTEL_BATTERY_REQUIRES_DCOMP"_ns);
       }
 
-      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate();
+      bool mixed;
+      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
       if (maxRefreshRate > 60) {
         mFeatureWrQualified->Disable(FeatureStatus::Blocked,
-                                    "Monitor refresh rate too high",
-                                    "REFRESH_RATE_TOO_HIGH"_ns);
+                                     "Monitor refresh rate too high",
+                                     "REFRESH_RATE_TOO_HIGH"_ns);
+      }
+    } else if (adapterVendorID == u"0x10de") {
+      bool mixed = false;
+      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
+      if (maxRefreshRate > 60 && mixed) {
+        mFeatureWrQualified->Disable(FeatureStatus::Blocked,
+                                     "Monitor refresh rate too high/mixed",
+                                     "NVIDIA_REFRESH_RATE_MIXED"_ns);
       }
     }
   }
@@ -338,12 +347,14 @@ void gfxConfigManager::ConfigureWebRender() {
                                  "FEATURE_FAILURE_DCOMP_PREF_DISABLED"_ns);
   }
 
+#ifndef NIGHTLY_BUILD
   if (!mIsWin10OrLater) {
     // XXX relax win version to windows 8.
     mFeatureWrDComp->Disable(FeatureStatus::Unavailable,
                              "Requires Windows 10 or later",
                              "FEATURE_FAILURE_DCOMP_NOT_WIN10"_ns);
   }
+#endif
 
   mFeatureWrDComp->MaybeSetFailed(
       mFeatureWr->IsEnabled(), FeatureStatus::Unavailable, "Requires WebRender",
