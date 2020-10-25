@@ -2,9 +2,6 @@ kind: pipeline
 type: docker
 name: default
 
-clone:
-  disable: true
-
 trigger:
   branch:
   - master
@@ -12,13 +9,7 @@ trigger:
   - push
 
 steps:
-- name: Clone the project
-  image: alpine/git
-  commands:
-  - git clone https://github.com/dothq/browser-ff .
-
 - name: Setup the remotes
-  image: alpine/git
   commands:
   - git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
   - git remote update
