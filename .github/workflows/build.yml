@@ -1,0 +1,22 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup remotes
+        run: |
+          git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
+          git remote update
+          git remote add dot https://github.com/dothq/browser-ff
+      - name: Bootstrap
+        run: ./mach bootstrap --no-interactive
+      - name: Build
+        run: ./mach build
