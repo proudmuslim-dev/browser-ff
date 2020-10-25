@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Install git-cinnabar
+        run: |
+          sudo git clone https://github.com/glandium/git-cinnabar /usr/bin/git-cinnabar
+          git cinnabar download
       - name: Clone repository
         run: git clone https://github.com/dothq/browser-ff .
       - name: Setup remotes
