@@ -7,10 +7,12 @@ on:
   pull_request:
 
 jobs:
-  sync:
+  build:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Clone repository
+        run: git clone https://github.com/dothq/browser-ff
       - name: Setup remotes
         run: |
           git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
