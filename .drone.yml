@@ -1,3 +1,4 @@
+---
 kind: pipeline
 type: docker
 name: default
@@ -5,14 +6,14 @@ name: default
 steps:
 - name: Setup the remotes
   commands:
-  - git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
-  - git remote update
-  - git remote add dot https://github.com/dothq/browser-ff
+    - git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
+    - git remote update
+    - git remote add dot https://github.com/dothq/browser-ff
   
 - name: Bootstrap
   commands:
-  - ./mach bootstrap --no-interactive
+    - ./mach bootstrap --no-interactive
 
 - name: Build Dot Browser
   commands:
-  - ./mach build
+    - ./mach build
