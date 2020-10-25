@@ -14,11 +14,12 @@ jobs:
       - name: Install git-cinnabar
         run: |
           python2 -V
-          sudo apt install python2 mercurial
+          sudo apt install mercurial
           sudo git clone https://github.com/glandium/git-cinnabar /usr/bin/git-cinnabar
           ls /usr/bin/git-cinnabar
           export PATH="/usr/bin/git-cinnabar:$PATH"
-          git cinnabar download 
+          git cinnabar download
+ 
       - name: Clone repository
         run: git clone https://github.com/dothq/browser-ff .
       - name: Setup remotes
