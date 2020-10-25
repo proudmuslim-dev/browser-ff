@@ -2495,7 +2495,7 @@ pref("first-startup.timeout", 30000);
 #endif
 
 // ----------------------------
-// DOT PREFERENCE MODIFICATIONS
+// DOT CONFIG MODIFICATIONS
 // ----------------------------
 
 // GENERAL
