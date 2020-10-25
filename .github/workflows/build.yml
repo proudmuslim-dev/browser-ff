@@ -14,8 +14,10 @@ jobs:
       - name: Install git-cinnabar
         run: |
           sudo git clone https://github.com/glandium/git-cinnabar /usr/bin/git-cinnabar
+          ls /usr/bin/git-cinnabar
           export PATH="/usr/bin/git-cinnabar:$PATH"
           git cinnabar download
+          where git-cinnabar
       - name: Clone repository
         run: git clone https://github.com/dothq/browser-ff .
       - name: Setup remotes
