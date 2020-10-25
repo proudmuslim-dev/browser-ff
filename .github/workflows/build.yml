@@ -13,6 +13,7 @@ jobs:
     steps:
       - name: Install git-cinnabar
         run: |
+          sudo apt install python2 mercurial
           sudo git clone https://github.com/glandium/git-cinnabar /usr/bin/git-cinnabar
           ls /usr/bin/git-cinnabar
           export PATH="/usr/bin/git-cinnabar:$PATH"
