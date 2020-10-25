@@ -1,22 +1,22 @@
 ---
 kind: pipeline
-type: docker
+type: exec
 name: default
 
-steps:
-- name: Setup the remotes
-  image: alpine/git
-  commands:
-    - git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
-    - git remote update
-    - git remote add dot https://github.com/dothq/browser-ff
-  
-- name: Bootstrap
-  image: bash
-  commands:
-    - ./mach bootstrap --no-interactive
+platform:
+  os: linux
+  arch: amd64
 
-- name: Build Dot Browser
-  image: bash
+steps:
+- name: Locate browser repository
   commands:
-    - ./mach build
+  - cd ~/browser-ff && ls
+- name: Pull
+  commands:
+  - git pull dot master
+- name: Bootstrap
+  commands:
+  - ./mach bootstrap --no-interactive
+- name: Build Dot
+  commands:
+  - ./mach build
