@@ -1,0 +1,25 @@
+---
+kind: pipeline
+type: exec
+name: default
+
+clone:
+  disable: true
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+- name: Locate browser repository
+  commands:
+  - cd ~/browser-ff && ls
+- name: Pull
+  commands:
+  - git pull dot master
+- name: Bootstrap
+  commands:
+  - ./mach bootstrap --no-interactive
+- name: Build Dot
+  commands:
+  - ./mach build

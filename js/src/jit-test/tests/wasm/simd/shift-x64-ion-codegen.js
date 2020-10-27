@@ -67,6 +67,7 @@ for ( let [op, expected] of [
   (module
     (func (export "f") (param v128) (result v128)
       (${op} (local.get 0) (i32.const 2))))`);
+
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;

@@ -2498,3 +2498,77 @@ pref("first-startup.timeout", 30000);
 #ifdef XP_WIN
   pref("default-browser-agent.enabled", true);
 #endif
+
+// ----------------------------
+// DOT CONFIG MODIFICATIONS
+// ----------------------------
+
+// GENERAL
+pref("general.autoScroll", true);
+pref("browser.preferences.experimental.hidden", true);
+pref("browser.preferences.experimental", false);
+
+// NETWORK
+pref("dom.security.https_only_mode", true); // Enable HTTPS-only mode
+pref("network.trr.mode", 2); // Enable DNS-over-HTTPS by default
+pref("network.trr.uri", "https://trr.dns.nextdns.io/");
+
+pref("network.security.esni.enabled", true); // Encrypted SNI support
+pref("network.http.http3.enabled", true); // HTTP3 support
+
+pref("network.IDN_show_punycode", true);  // Convert non-unicode domains to Unicode to stop phishing
+
+pref("network.http.referer.XOriginTrimmingPolicy", 2); // Tighten referrer handling policy
+pref("network.http.referer.XOriginPolicy", 2);
+
+pref("network.dns.disablePrefetch", true); // Disable prefetch which exposes your ip to unvisited sites
+pref("network.dns.disablePrefetchFromHTTPS", true);
+pref("network.predictor.enabled", false);
+pref("network.predictor.enable-prefetch", false);
+pref("network.prefetch-next", false);
+
+// OPT OUT OF STUDIES & EXPERIMENTS
+pref("app.shield.optoutstudies.enabled", false);
+pref("browser.onboarding.enabled", false);
+pref("experiments.enabled", false);
+pref("network.allow-experiments", false);
+
+// DISABLE SAFEBROWSING
+pref("browser.safebrowsing.malware.enabled", false);
+pref("browser.safebrowsing.phishing.enabled", false);
+pref("browser.safebrowsing.downloads.enabled", false);
+pref("browser.safebrowsing.downloads.remote.block_dangerous", false);
+pref("browser.safebrowsing.downloads.remote.block_dangerous_host", false);
+pref("browser.safebrowsing.downloads.remote.enabled", false);
+pref("browser.safebrowsing.downloads.remote.block_potentially_unwanted", false);
+pref("browser.safebrowsing.downloads.remote.block_uncommon", false);
+pref("browser.safebrowsing.blockedURIs.enabled", false);
+
+pref("browser.safebrowsing.downloads.remote.url", "");
+pref("browser.safebrowsing.provider.google4.dataSharing.enabled", "");
+pref("browser.safebrowsing.provider.google4.updateURL", "");
+pref("browser.safebrowsing.provider.google4.reportURL", "");
+pref("browser.safebrowsing.provider.google4.reportPhishMistakeURL", "");
+pref("browser.safebrowsing.provider.google4.reportMalwareMistakeURL", "");
+pref("browser.safebrowsing.provider.google4.lists", "");
+pref("browser.safebrowsing.provider.google4.gethashURL", "");
+pref("browser.safebrowsing.provider.google4.dataSharingURL", "");
+pref("browser.safebrowsing.provider.google4.dataSharing.enabled", false);
+pref("browser.safebrowsing.provider.google4.advisoryURL", "");
+pref("browser.safebrowsing.provider.google4.advisoryName", "");
+pref("browser.safebrowsing.provider.google.updateURL", "");
+pref("browser.safebrowsing.provider.google.reportURL", "");
+pref("browser.safebrowsing.provider.google.reportPhishMistakeURL", "");
+pref("browser.safebrowsing.provider.google.reportMalwareMistakeURL", "");
+pref("browser.safebrowsing.provider.google.pver", "");
+pref("browser.safebrowsing.provider.google.lists", "");
+pref("browser.safebrowsing.provider.google.gethashURL", "");
+pref("browser.safebrowsing.provider.google.advisoryURL", "");
+
+// APPEARANCE
+pref("layout.css.backdrop-filter.enabled", true);
+pref("gfx.webrender.all", true);
+pref("browser.tabs.drawInTitlebar", true);
+// ----------------------------
+// END DOT PREF MODIFICATIONS
+// ----------------------------

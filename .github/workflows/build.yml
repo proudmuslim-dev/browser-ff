@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install git-cinnabar
+        run: |
+          python2 -V
+          sudo apt install mercurial
+          sudo git clone https://github.com/glandium/git-cinnabar /usr/bin/git-cinnabar
+          ls /usr/bin/git-cinnabar
+          export PATH="/usr/bin/git-cinnabar:$PATH"
+          git cinnabar download
+ 
+      - name: Clone repository
+        run: git clone https://github.com/dothq/browser-ff .
+      - name: Setup remotes
+        run: |
+          echo Setting origin remote to https://hg.mozilla.org/mozilla-unified...
+          git remote set-url origin hg::https://hg.mozilla.org/mozilla-unified
+          echo Updating remotes...
+          git remote update
+          echo Settings dot remote to https://github.com/dothq/browser-ff...
+          git remote add dot https://github.com/dothq/browser-ff
+      - name: Bootstrap
+        run: ./mach bootstrap --no-interactive
+      - name: Build
+        run: ./mach build

@@ -139,6 +139,7 @@ for ( let [op, expected] of [
     (func (export "f") (param v128) (param v128) (result v128)
       (${op} (local.get 0) (local.get 1))))
         `);
+
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;
@@ -212,11 +213,13 @@ for ( let [op, expected] of [
 000000..  5d                        pop %rbp
 `],
 ] ) {
+
     let ins = wasmEvalText(`
   (module
     (func (export "f") (param v128) (param v128) (result v128)
       (${op} (local.get 1) (local.get 0))))
         `);
+
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;

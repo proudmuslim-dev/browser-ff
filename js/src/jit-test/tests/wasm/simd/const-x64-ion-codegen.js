@@ -75,6 +75,7 @@ for ( let [op, expected] of [
     (func (export "f") (result v128)
       (${op})))
         `);
+
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;
