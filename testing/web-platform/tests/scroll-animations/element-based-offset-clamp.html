@@ -76,6 +76,10 @@
 
       const target = scroller.querySelector("#target");
 
+      // Force layout before creating the scroll timeline to ensure the correct
+      // scroll range.
+      target.offsetHeight;
+
       const timeline = createScrollTimeline(t, {
         scrollSource: scroller,
         orientation: config.orientation,

@@ -43,6 +43,7 @@ DIRS += [
     "originattributes",
     "ion",
     "places",
+    "pocket",
     "preferences",
     "privatebrowsing",
     "prompts",

@@ -2649,6 +2649,10 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
     return NS_OK;
   }
 
+  if (NS_WARN_IF(!SelectionRefPtr()->RangeCount())) {
+    return NS_ERROR_FAILURE;  // XXX Should we just return NS_OK?
+  }
+
   AutoPlaceholderBatch treateAsOneTransaction(*this,
                                               ScrollSelectionIntoView::Yes);
   // Don't let Rules System change the selection
@@ -2658,40 +2662,34 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
   // is retained after joining. This leaves the target cell selected
   // as well as the "non-contiguous" cells, so user can see what happened.
 
-  ErrorResult error;
-  CellAndIndexes firstSelectedCell(*this, MOZ_KnownLive(*SelectionRefPtr()),
-                                   error);
-  if (error.Failed()) {
-    NS_WARNING("CellAndIndexes failed");
-    return EditorBase::ToGenericNSResult(error.StealNSResult());
-  }
+  SelectedTableCellScanner scanner(*SelectionRefPtr());
 
-  bool joinSelectedCells = false;
-  if (firstSelectedCell.mElement) {
-    RefPtr<Element> secondCell = GetNextSelectedTableCellElement(error);
-    if (error.Failed()) {
-      NS_WARNING("HTMLEditor::GetNextSelectedTableCellElement() failed");
-      return EditorBase::ToGenericNSResult(error.StealNSResult());
-    }
-
-    // If only one cell is selected, join with cell to the right
-    joinSelectedCells = (secondCell != nullptr);
-  }
-
-  if (joinSelectedCells) {
+  // If only one cell is selected, join with cell to the right
+  if (scanner.ElementsRef().Length() > 1) {
     // We have selected cells: Join just contiguous cells
     // and just merge contents if not contiguous
+    ErrorResult error;
     TableSize tableSize(*this, *table, error);
     if (error.Failed()) {
       NS_WARNING("TableSize failed");
       return EditorBase::ToGenericNSResult(error.StealNSResult());
     }
 
+    RefPtr<PresShell> presShell = GetPresShell();
+    // `MOZ_KnownLive(scanner.ElementsRef()[0])` is safe because `scanner`
+    // grabs it until it's destroyed later.
+    CellIndexes firstSelectedCellIndexes(
+        MOZ_KnownLive(scanner.ElementsRef()[0]), presShell, error);
+    if (error.Failed()) {
+      NS_WARNING("CellIndexes failed");
+      return EditorBase::ToGenericNSResult(error.StealNSResult());
+    }
+
     // Get spans for cell we will merge into
     int32_t firstRowSpan, firstColSpan;
-    nsresult rv = GetCellSpansAt(table, firstSelectedCell.mIndexes.mRow,
-                                 firstSelectedCell.mIndexes.mColumn,
-                                 firstRowSpan, firstColSpan);
+    nsresult rv = GetCellSpansAt(table, firstSelectedCellIndexes.mRow,
+                                 firstSelectedCellIndexes.mColumn, firstRowSpan,
+                                 firstColSpan);
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::GetCellSpansAt() failed");
       return EditorBase::ToGenericNSResult(rv);
@@ -2702,13 +2700,13 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
     // that we can join adjacent cells to the block
     // Start with same as the first values,
     // then expand as we find adjacent selected cells
-    int32_t lastRowIndex = firstSelectedCell.mIndexes.mRow;
-    int32_t lastColIndex = firstSelectedCell.mIndexes.mColumn;
+    int32_t lastRowIndex = firstSelectedCellIndexes.mRow;
+    int32_t lastColIndex = firstSelectedCellIndexes.mColumn;
 
     // First pass: Determine boundaries of contiguous rectangular block that
     // we will join into one cell, favoring adjacent cells in the same row.
     IgnoredErrorResult ignoredError;
-    for (int32_t rowIndex = firstSelectedCell.mIndexes.mRow;
+    for (int32_t rowIndex = firstSelectedCellIndexes.mRow;
          rowIndex <= lastRowIndex; rowIndex++) {
       int32_t currentRowCount = tableSize.mRowCount;
       // Be sure each row doesn't have rowspan errors
@@ -2723,8 +2721,8 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
       bool cellFoundInRow = false;
       bool lastRowIsSet = false;
       int32_t lastColInRow = 0;
-      int32_t firstColInRow = firstSelectedCell.mIndexes.mColumn;
-      int32_t colIndex = firstSelectedCell.mIndexes.mColumn;
+      int32_t firstColInRow = firstSelectedCellIndexes.mColumn;
+      int32_t colIndex = firstSelectedCellIndexes.mColumn;
       for (CellData cellData; colIndex < tableSize.mColumnCount;
            colIndex = cellData.NextColumnIndex()) {
         cellData.Update(*this, *table, rowIndex, colIndex, ignoredError);
@@ -2739,8 +2737,8 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
             // We've just found the first selected cell in this row
             firstColInRow = cellData.mCurrent.mColumn;
           }
-          if (cellData.mCurrent.mRow > firstSelectedCell.mIndexes.mRow &&
-              firstColInRow != firstSelectedCell.mIndexes.mColumn) {
+          if (cellData.mCurrent.mRow > firstSelectedCellIndexes.mRow &&
+              firstColInRow != firstSelectedCellIndexes.mColumn) {
             // We're in at least the second row,
             // but left boundary is "ragged" (not the same as 1st row's start)
             // Let's just end block on previous row
@@ -2756,7 +2754,7 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
           cellFoundInRow = true;
         } else if (cellFoundInRow) {
           // No cell or not selected, but at least one cell in row was found
-          if (cellData.mCurrent.mRow > firstSelectedCell.mIndexes.mRow + 1 &&
+          if (cellData.mCurrent.mRow > firstSelectedCellIndexes.mRow + 1 &&
               cellData.mCurrent.mColumn <= lastColIndex) {
             // Cell is in a column less than current right border in
             // the third or higher selected row, so stop block at the previous
@@ -2772,7 +2770,7 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
 
       // Done with this row
       if (cellFoundInRow) {
-        if (rowIndex == firstSelectedCell.mIndexes.mRow) {
+        if (rowIndex == firstSelectedCellIndexes.mRow) {
           // First row always initializes the right boundary
           lastColIndex = lastColInRow;
         }
@@ -2820,10 +2818,10 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
 
         // Merge only selected cells (skip cell we're merging into, of course)
         if (cellData.mIsSelected &&
-            cellData.mElement != firstSelectedCell.mElement) {
-          if (cellData.mCurrent.mRow >= firstSelectedCell.mIndexes.mRow &&
+            cellData.mElement != scanner.ElementsRef()[0]) {
+          if (cellData.mCurrent.mRow >= firstSelectedCellIndexes.mRow &&
               cellData.mCurrent.mRow <= lastRowIndex &&
-              cellData.mCurrent.mColumn >= firstSelectedCell.mIndexes.mColumn &&
+              cellData.mCurrent.mColumn >= firstSelectedCellIndexes.mColumn &&
               cellData.mCurrent.mColumn <= lastColIndex) {
             // We are within the join region
             // Problem: It is very tricky to delete cells as we merge,
@@ -2850,8 +2848,8 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
               }
             }
 
-            nsresult rv = MergeCells(firstSelectedCell.mElement,
-                                     cellData.mElement, false);
+            nsresult rv =
+                MergeCells(scanner.ElementsRef()[0], cellData.mElement, false);
             if (NS_FAILED(rv)) {
               NS_WARNING("HTMLEditor::MergeCells() failed");
               return EditorBase::ToGenericNSResult(rv);
@@ -2861,8 +2859,8 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
             deleteList.AppendElement(cellData.mElement.get());
           } else if (aMergeNonContiguousContents) {
             // Cell is outside join region -- just merge the contents
-            nsresult rv = MergeCells(firstSelectedCell.mElement,
-                                     cellData.mElement, false);
+            nsresult rv =
+                MergeCells(scanner.ElementsRef()[0], cellData.mElement, false);
             if (NS_FAILED(rv)) {
               NS_WARNING("HTMLEditor::MergeCells() failed");
               return rv;
@@ -2920,14 +2918,14 @@ NS_IMETHODIMP HTMLEditor::JoinTableCells(bool aMergeNonContiguousContents) {
     }
 
     // Set spans for the cell everything merged into
-    rv = SetRowSpan(MOZ_KnownLive(firstSelectedCell.mElement),
-                    lastRowIndex - firstSelectedCell.mIndexes.mRow + 1);
+    rv = SetRowSpan(MOZ_KnownLive(scanner.ElementsRef()[0]),
+                    lastRowIndex - firstSelectedCellIndexes.mRow + 1);
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::SetRowSpan() failed");
       return EditorBase::ToGenericNSResult(rv);
     }
-    rv = SetColSpan(MOZ_KnownLive(firstSelectedCell.mElement),
-                    lastColIndex - firstSelectedCell.mIndexes.mColumn + 1);
+    rv = SetColSpan(MOZ_KnownLive(scanner.ElementsRef()[0]),
+                    lastColIndex - firstSelectedCellIndexes.mColumn + 1);
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::SetColSpan() failed");
       return EditorBase::ToGenericNSResult(rv);
@@ -3909,79 +3907,6 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCells(
   return NS_OK;
 }
 
-already_AddRefed<Element> HTMLEditor::GetFirstSelectedTableCellElement(
-    ErrorResult& aRv) const {
-  MOZ_ASSERT(IsEditActionDataAvailable());
-
-  MOZ_ASSERT(!aRv.Failed());
-
-  const nsRange* firstRange = SelectionRefPtr()->GetRangeAt(0);
-  if (NS_WARN_IF(!firstRange)) {
-    // XXX Why don't we treat "not found" in this case?
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
-
-  // XXX It must be unclear when this is reset...
-  mSelectedCellIndex = 0;
-
-  RefPtr<Element> selectedCell =
-      HTMLEditUtils::GetTableCellElementIfOnlyOneSelected(*firstRange);
-  if (!selectedCell) {
-    // This case means that Selection is in a text node in normal cases or
-    // the range does not select only a cell.  E.g., selects non-table cell
-    // element, selects two or more cells, or does not select any cell element.
-    return nullptr;
-  }
-
-  // Setup for GetNextSelectedTableCellElement()
-  // XXX Oh, increment it now?  Rather than when
-  //     GetNextSelectedTableCellElement() is called?
-  mSelectedCellIndex = 1;
-
-  return selectedCell.forget();
-}
-
-already_AddRefed<Element> HTMLEditor::GetNextSelectedTableCellElement(
-    ErrorResult& aRv) const {
-  MOZ_ASSERT(IsEditActionDataAvailable());
-
-  MOZ_ASSERT(!aRv.Failed());
-
-  if (mSelectedCellIndex >= SelectionRefPtr()->RangeCount()) {
-    // We've already returned all selected cells.
-    return nullptr;
-  }
-
-  MOZ_ASSERT(mSelectedCellIndex > 0);
-  for (; mSelectedCellIndex < SelectionRefPtr()->RangeCount();
-       mSelectedCellIndex++) {
-    const nsRange* range = SelectionRefPtr()->GetRangeAt(mSelectedCellIndex);
-    if (NS_WARN_IF(!range)) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return nullptr;
-    }
-
-    if (!range->GetStartContainer() || !range->GetChildAtStartOffset() ||
-        !range->GetEndContainer()) {
-      // This means that the range is not positioned or in non-element node,
-      // e.g., a text node.  Returns nullptr without error if not found.
-      // XXX Why don't we just skip such range or incrementing
-      //     mSelectedCellIndex for next call?
-      return nullptr;
-    }
-
-    if (RefPtr<Element> nextSelectedCellElement =
-            HTMLEditUtils::GetTableCellElementIfOnlyOneSelected(*range)) {
-      mSelectedCellIndex++;
-      return nextSelectedCellElement.forget();
-    }
-  }
-
-  // Returns nullptr without error if not found.
-  return nullptr;
-}
-
 NS_IMETHODIMP HTMLEditor::GetFirstSelectedCellInTable(int32_t* aRowIndex,
                                                       int32_t* aColumnIndex,
                                                       Element** aCellElement) {
@@ -3995,43 +3920,31 @@ NS_IMETHODIMP HTMLEditor::GetFirstSelectedCellInTable(int32_t* aRowIndex,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
+  if (NS_WARN_IF(!SelectionRefPtr()->RangeCount())) {
+    return NS_ERROR_FAILURE;  // XXX Should return NS_OK?
+  }
+
   *aRowIndex = 0;
   *aColumnIndex = 0;
   *aCellElement = nullptr;
+  RefPtr<Element> firstSelectedCellElement =
+      HTMLEditUtils::GetFirstSelectedTableCellElement(*SelectionRefPtr());
+  if (!firstSelectedCellElement) {
+    return NS_OK;
+  }
 
   ErrorResult error;
-  CellAndIndexes result(*this, MOZ_KnownLive(*SelectionRefPtr()), error);
+  RefPtr<PresShell> presShell = GetPresShell();
+  CellIndexes indexes(*firstSelectedCellElement, presShell, error);
   if (error.Failed()) {
-    NS_WARNING("CellAndIndexes failed");
-    return EditorBase::ToGenericNSResult(error.StealNSResult());
+    NS_WARNING("CellIndexes failed");
+    return error.StealNSResult();
   }
-  result.mElement.forget(aCellElement);
-  *aRowIndex = std::max(result.mIndexes.mRow, 0);
-  *aColumnIndex = std::max(result.mIndexes.mColumn, 0);
+
+  firstSelectedCellElement.forget(aCellElement);
+  *aRowIndex = indexes.mRow;
+  *aColumnIndex = indexes.mColumn;
   return NS_OK;
-}
-
-void HTMLEditor::CellAndIndexes::Update(HTMLEditor& aHTMLEditor,
-                                        Selection& aSelection,
-                                        ErrorResult& aRv) {
-  MOZ_ASSERT(!aRv.Failed());
-
-  mIndexes.mRow = -1;
-  mIndexes.mColumn = -1;
-
-  mElement = aHTMLEditor.GetFirstSelectedTableCellElement(aRv);
-  if (aRv.Failed()) {
-    NS_WARNING("HTMLEditor::GetFirstSelectedTableCellElement() failed");
-    return;
-  }
-  if (!mElement) {
-    return;
-  }
-
-  const RefPtr<PresShell> presShell{aHTMLEditor.GetPresShell()};
-  const RefPtr<Element> element{mElement};
-  mIndexes.Update(*element, presShell, aRv);
-  NS_WARNING_ASSERTION(!aRv.Failed(), "CellIndexes::Update() failed");
 }
 
 void HTMLEditor::SetSelectionAfterTableEdit(Element* aTable, int32_t aRow,
@@ -4188,13 +4101,14 @@ already_AddRefed<Element> HTMLEditor::GetSelectedOrParentTableElement(
     *aIsCellSelected = false;
   }
 
-  // Try to get the first selected cell, first.
-  RefPtr<Element> cellElement = GetFirstSelectedTableCellElement(aRv);
-  if (aRv.Failed()) {
-    NS_WARNING("HTMLEditor::GetFirstSelectedTableCellElement() failed");
+  if (NS_WARN_IF(!SelectionRefPtr()->RangeCount())) {
+    aRv.Throw(NS_ERROR_FAILURE);  // XXX Shouldn't throw an exception?
     return nullptr;
   }
 
+  // Try to get the first selected cell, first.
+  RefPtr<Element> cellElement =
+      HTMLEditUtils::GetFirstSelectedTableCellElement(*SelectionRefPtr());
   if (cellElement) {
     if (aIsCellSelected) {
       *aIsCellSelected = true;
@@ -4258,6 +4172,10 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
+  if (NS_WARN_IF(!SelectionRefPtr()->RangeCount())) {
+    return NS_ERROR_FAILURE;  // XXX Should we just return NS_OK?
+  }
+
   // Be sure we have a table element
   //  (if aElement is null, this uses selection's anchor node)
   RefPtr<Element> table;
@@ -4287,12 +4205,8 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
   }
 
   // Traverse all selected cells
-  RefPtr<Element> selectedCell = GetFirstSelectedTableCellElement(error);
-  if (error.Failed()) {
-    NS_WARNING("HTMLEditor::GetFirstSelectedTableCellElement() failed");
-    return EditorBase::ToGenericNSResult(error.StealNSResult());
-  }
-  if (!selectedCell) {
+  SelectedTableCellScanner scanner(*SelectionRefPtr());
+  if (!scanner.IsInTableCellSelectionMode()) {
     return NS_OK;
   }
 
@@ -4304,10 +4218,12 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
 
   const RefPtr<PresShell> presShell{GetPresShell()};
   bool allCellsInRowAreSelected = false;
-  bool allCellsInColAreSelected = false;
-  IgnoredErrorResult ignoredError;
-  while (selectedCell) {
-    CellIndexes selectedCellIndexes(*selectedCell, presShell, error);
+  for (const OwningNonNull<Element>& selectedCellElement :
+       scanner.ElementsRef()) {
+    // `MOZ_KnownLive(selectedCellElement)` is safe because `scanner` grabs
+    // it until it's destroyed later.
+    CellIndexes selectedCellIndexes(MOZ_KnownLive(selectedCellElement),
+                                    presShell, error);
     if (error.Failed()) {
       NS_WARNING("CellIndexes failed");
       return EditorBase::ToGenericNSResult(error.StealNSResult());
@@ -4321,11 +4237,6 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
         break;
       }
     }
-    selectedCell = GetNextSelectedTableCellElement(ignoredError);
-    NS_WARNING_ASSERTION(
-        !ignoredError.Failed(),
-        "HTMLEditor::GetNextSelectedTableCellElement() failed, but ignored");
-    ignoredError.SuppressException();
   }
 
   if (allCellsInRowAreSelected) {
@@ -4338,14 +4249,13 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
   indexArray.Clear();
 
   // Start at first cell again
-  selectedCell = GetFirstSelectedTableCellElement(ignoredError);
-  NS_WARNING_ASSERTION(
-      !ignoredError.Failed(),
-      "HTMLEditor::GetFirstSelectedTableCellElement() failed, but ignored");
-  ignoredError.SuppressException();
-
-  while (selectedCell) {
-    CellIndexes selectedCellIndexes(*selectedCell, presShell, error);
+  bool allCellsInColAreSelected = false;
+  for (const OwningNonNull<Element>& selectedCellElement :
+       scanner.ElementsRef()) {
+    // `MOZ_KnownLive(selectedCellElement)` is safe because `scanner` grabs
+    // it until it's destroyed later.
+    CellIndexes selectedCellIndexes(MOZ_KnownLive(selectedCellElement),
+                                    presShell, error);
     if (error.Failed()) {
       NS_WARNING("CellIndexes failed");
       return EditorBase::ToGenericNSResult(error.StealNSResult());
@@ -4360,11 +4270,6 @@ NS_IMETHODIMP HTMLEditor::GetSelectedCellsType(Element* aElement,
         break;
       }
     }
-    selectedCell = GetNextSelectedTableCellElement(ignoredError);
-    NS_WARNING_ASSERTION(
-        !ignoredError.Failed(),
-        "HTMLEditor::GetNextSelectedTableCellElement() failed, but ignored");
-    ignoredError.SuppressException();
   }
   if (allCellsInColAreSelected) {
     *aSelectionType = static_cast<uint32_t>(TableSelectionMode::Column);
