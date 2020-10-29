@@ -1107,7 +1107,8 @@ static bool DisplayListIsNonBlank(nsDisplayList* aList) {
 // non-white canvas or SVG. This excludes any content of iframes, but
 // includes text with pending webfonts. This is the first time users
 // could start consuming page content."
-static bool DisplayListIsContentful(nsDisplayList* aList) {
+static bool DisplayListIsContentful(nsDisplayListBuilder* aBuilder,
+                                    nsDisplayList* aList) {
   for (nsDisplayItem* i : *aList) {
     DisplayItemType type = i->GetType();
     nsDisplayList* children = i->GetChildren();
@@ -1119,10 +1120,14 @@ static bool DisplayListIsContentful(nsDisplayList* aList) {
       // actually tracking all modifications)
       default:
         if (i->IsContentful()) {
-          return true;
+          bool dummy;
+          nsRect bound = i->GetBounds(aBuilder, &dummy);
+          if (!bound.IsEmpty()) {
+            return true;
+          }
         }
         if (children) {
-          if (DisplayListIsContentful(children)) {
+          if (DisplayListIsContentful(aBuilder, children)) {
             return true;
           }
         }
@@ -1146,10 +1151,14 @@ void nsDisplayListBuilder::LeavePresShell(const nsIFrame* aReferenceFrame,
         pc->NotifyNonBlankPaint();
       }
     }
-    if (!pc->HadContentfulPaint()) {
-      if (!CurrentPresShellState()->mIsBackgroundOnly &&
-          DisplayListIsContentful(aPaintedContents)) {
-        pc->NotifyContentfulPaint();
+    nsRootPresContext* rootPresContext = pc->GetRootPresContext();
+    if (!pc->HadContentfulPaint() && rootPresContext &&
+        rootPresContext->RefreshDriver()->IsInRefresh()) {
+      if (!CurrentPresShellState()->mIsBackgroundOnly) {
+        if (pc->HasEverBuiltInvisibleText() ||
+            DisplayListIsContentful(this, aPaintedContents)) {
+          pc->NotifyContentfulPaint();
+        }
       }
     }
   }
@@ -1461,24 +1470,38 @@ const DisplayItemClipChain* nsDisplayListBuilder::FuseClipChainUpTo(
 
 const nsIFrame* nsDisplayListBuilder::FindReferenceFrameFor(
     const nsIFrame* aFrame, nsPoint* aOffset) const {
+  auto MaybeApplyAdditionalOffset = [&]() {
+    if (AdditionalOffset()) {
+      // The additional reference frame offset should only affect descendants
+      // of |mAdditionalOffsetFrame|.
+      MOZ_ASSERT(nsLayoutUtils::IsAncestorFrameCrossDoc(mAdditionalOffsetFrame,
+                                                        aFrame));
+      *aOffset += *AdditionalOffset();
+    }
+  };
+
   if (aFrame == mCurrentFrame) {
     if (aOffset) {
       *aOffset = mCurrentOffsetToReferenceFrame;
     }
     return mCurrentReferenceFrame;
   }
+
   for (const nsIFrame* f = aFrame; f;
        f = nsLayoutUtils::GetCrossDocParentFrame(f)) {
     if (f == mReferenceFrame || f->IsTransformed()) {
       if (aOffset) {
         *aOffset = aFrame->GetOffsetToCrossDoc(f);
+        MaybeApplyAdditionalOffset();
       }
       return f;
     }
   }
+
   if (aOffset) {
     *aOffset = aFrame->GetOffsetToCrossDoc(mReferenceFrame);
   }
+
   return mReferenceFrame;
 }
 
@@ -5622,11 +5645,6 @@ static LayerState RequiredLayerStateForChildren(
 nsRect nsDisplayWrapList::GetComponentAlphaBounds(
     nsDisplayListBuilder* aBuilder) const {
   return mListPtr->GetComponentAlphaBounds(aBuilder);
-}
-
-void nsDisplayWrapList::SetReferenceFrame(const nsIFrame* aFrame) {
-  mReferenceFrame = aFrame;
-  mToReferenceFrame = mFrame->GetOffsetToCrossDoc(mReferenceFrame);
 }
 
 bool nsDisplayWrapList::CreateWebRenderCommands(
@@ -10179,6 +10197,7 @@ nsDisplayListBuilder::AutoBuildingDisplayList::AutoBuildingDisplayList(
       mPrevHitTestArea(aBuilder->mHitTestArea),
       mPrevHitTestInfo(aBuilder->mHitTestInfo),
       mPrevOffset(aBuilder->mCurrentOffsetToReferenceFrame),
+      mPrevAdditionalOffset(aBuilder->mAdditionalOffset),
       mPrevVisibleRect(aBuilder->mVisibleRect),
       mPrevDirtyRect(aBuilder->mDirtyRect),
       mPrevAGR(aBuilder->mCurrentAGR),
@@ -10187,7 +10206,8 @@ nsDisplayListBuilder::AutoBuildingDisplayList::AutoBuildingDisplayList(
       mPrevBuildingInvisibleItems(aBuilder->mBuildingInvisibleItems),
       mPrevInInvalidSubtree(aBuilder->mInInvalidSubtree) {
   if (aIsTransformed) {
-    aBuilder->mCurrentOffsetToReferenceFrame = nsPoint();
+    aBuilder->mCurrentOffsetToReferenceFrame =
+        aBuilder->AdditionalOffset().refOr(nsPoint());
     aBuilder->mCurrentReferenceFrame = aForChild;
   } else if (aBuilder->mCurrentFrame == aForChild->GetParent()) {
     aBuilder->mCurrentOffsetToReferenceFrame += aForChild->GetPosition();

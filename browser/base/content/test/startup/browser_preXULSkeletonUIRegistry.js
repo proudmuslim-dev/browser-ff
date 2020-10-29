@@ -43,6 +43,7 @@ function readRegKeyExtended(aRoot, aPath, aKey, aRegistryNode = 0) {
 
 add_task(async function testWritesEnabledOnPrefChange() {
   Services.prefs.setBoolPref("browser.startup.preXulSkeletonUI", true);
+
   let enabled = WindowsRegistry.readRegKey(
     Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
     "Software\\Mozilla\\Firefox\\PreXULSkeletonUISettings",

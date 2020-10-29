@@ -109,6 +109,11 @@ WINDOWS_WORKER_TYPES = {
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
     },
+    "windows10-64-ccov-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
+        "hardware": "t-win10-64-1803-hw",
+    },
     "windows10-64-devedition": {
         "virtual": "t-win10-64",
         "virtual-with-gpu": "t-win10-64-gpu-s",
@@ -274,6 +279,7 @@ TEST_VARIANTS = {
             "run-on-projects": {
                 "by-test-platform": {
                     "mac.*": ["trunk"],
+                    "win.*": ["trunk"],
                     "default": [],
                 },
             },
@@ -1189,9 +1195,13 @@ def get_mobile_project(task):
 
 
 @transforms.add
-def disable_fennec_e10s(config, tasks):
+def adjust_mobile_e10s(config, tasks):
     for task in tasks:
-        if get_mobile_project(task) == "fennec":
+        project = get_mobile_project(task)
+        if project == "geckoview":
+            # Geckoview is always-e10s
+            task["e10s"] = True
+        elif project == "fennec":
             # Fennec is non-e10s
             task["e10s"] = False
         yield task

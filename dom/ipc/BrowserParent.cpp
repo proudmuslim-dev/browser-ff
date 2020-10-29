@@ -79,6 +79,7 @@
 #include "nsIXPConnect.h"
 #include "nsIXULBrowserWindow.h"
 #include "nsIAppWindow.h"
+#include "nsLayoutUtils.h"
 #include "nsQueryActor.h"
 #include "nsSHistory.h"
 #include "nsViewManager.h"
@@ -231,8 +232,7 @@ BrowserParent::BrowserParent(ContentParent* aManager, const TabId& aTabId,
       mHasPresented(false),
       mIsReadyToHandleInputEvents(false),
       mIsMouseEnterIntoWidgetEventSuppressed(false),
-      mSuspendedProgressEvents(false),
-      mSuspendMediaWhenInactive(false) {
+      mSuspendedProgressEvents(false) {
   MOZ_ASSERT(aManager);
   // When the input event queue is disabled, we don't need to handle the case
   // that some input events are dispatched before PBrowserConstructor.
@@ -3380,16 +3380,6 @@ void BrowserParent::SetDocShellIsActive(bool isActive) {
 #endif
 }
 
-bool BrowserParent::GetSuspendMediaWhenInactive() const {
-  return mSuspendMediaWhenInactive;
-}
-
-void BrowserParent::SetSuspendMediaWhenInactive(
-    bool aSuspendMediaWhenInactive) {
-  mSuspendMediaWhenInactive = aSuspendMediaWhenInactive;
-  Unused << SendSetSuspendMediaWhenInactive(aSuspendMediaWhenInactive);
-}
-
 bool BrowserParent::GetHasPresented() { return mHasPresented; }
 
 bool BrowserParent::GetHasLayers() { return mHasLayers; }
@@ -3697,28 +3687,6 @@ mozilla::ipc::IPCResult BrowserParent::RecvRemotePaintIsReady() {
   event->SetTrusted(true);
   event->WidgetEventPtr()->mFlags.mOnlyChromeDispatch = true;
   mFrameElement->DispatchEvent(*event);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult BrowserParent::RecvNotifyCompositorTransaction() {
-  RefPtr<nsFrameLoader> frameLoader = GetFrameLoader();
-
-  if (!frameLoader) {
-    return IPC_OK();
-  }
-
-  nsIFrame* docFrame = frameLoader->GetPrimaryFrameOfOwningContent();
-
-  if (!docFrame) {
-    // Bad, but nothing we can do about it (XXX/cjones: or is there?
-    // maybe bug 589337?).  When the new frame is created, we'll
-    // probably still be the current render frame and will get to draw
-    // our content then.  Or, we're shutting down and this update goes
-    // to /dev/null.
-    return IPC_OK();
-  }
-
-  docFrame->InvalidateLayer(DisplayItemType::TYPE_REMOTE);
   return IPC_OK();
 }
 

@@ -3627,11 +3627,11 @@ MDefinition* MReturnFromCtor::foldsTo(TempAllocator& alloc) {
 }
 
 MDefinition* MTypeOf::foldsTo(TempAllocator& alloc) {
-  if (!input()->isBox()) {
-    return this;
+  MDefinition* unboxed = input();
+  if (unboxed->isBox()) {
+    unboxed = unboxed->toBox()->input();
   }
 
-  MDefinition* unboxed = input()->toBox()->input();
   JSType type;
   switch (unboxed->type()) {
     case MIRType::Double:
@@ -5216,7 +5216,7 @@ MDefinition* MWasmReduceSimd128::foldsTo(TempAllocator& alloc) {
       case wasm::SimdOp::I8x16AnyTrue:
       case wasm::SimdOp::I16x8AnyTrue:
       case wasm::SimdOp::I32x4AnyTrue:
-        i32Result = !c.isIntegerZero();
+        i32Result = !c.isZeroBits();
         break;
       case wasm::SimdOp::I8x16AllTrue:
         i32Result = AllTrue(

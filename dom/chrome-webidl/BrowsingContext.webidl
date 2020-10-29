@@ -109,6 +109,8 @@ interface BrowsingContext {
 
   [SetterThrows] attribute float textZoom;
 
+  [SetterThrows] attribute boolean suspendMediaWhenInactive;
+
   // Default value for nsIContentViewer::authorStyleDisabled in any new
   // browsing contexts created as a descendant of this one.
   //
@@ -219,6 +221,8 @@ interface CanonicalBrowsingContext : BrowsingContext {
   readonly attribute nsISHistory? sessionHistory;
 
   readonly attribute MediaController? mediaController;
+
+  void resetScalingZoom();
 };
 
 [Exposed=Window, ChromeOnly]
