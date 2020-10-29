@@ -25,6 +25,10 @@ for ( let [ simd_type, expected ] of [
   (module
     (func (export "f") (param ${type}) (result v128)
       (${simd_type}.splat (local.get 0))))`);
+<<<<<<< HEAD
+=======
+
+>>>>>>> c91326250905fde3723d1be11580675ba5f3c38a
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;
@@ -39,7 +43,11 @@ for ( let [ simd_type, expected ] of [
 
 if (!getBuildConfiguration().windows) {
     for ( let [ op, expected ] of [
+<<<<<<< HEAD
         ['v128.load32_splat', `
+=======
+        ['v128.load32_splat', `er
+>>>>>>> c91326250905fde3723d1be11580675ba5f3c38a
 000000..  48 8b ec                  mov %rsp, %rbp
 000000..  f3 41 0f 10 04 3f         movssl \\(%r15,%rdi,1\\), %xmm0
 000000..  0f c6 c0 00               shufps \\$0x00, %xmm0, %xmm0
@@ -60,6 +68,10 @@ if (!getBuildConfiguration().windows) {
 000000..  66 41 0f 38 30 04 3f      pmovzxbwq \\(%r15,%rdi,1\\), %xmm0
 000000..  5d                        pop %rbp
 `],
+<<<<<<< HEAD
+=======
+
+>>>>>>> c91326250905fde3723d1be11580675ba5f3c38a
         ['v128.load16x4_s', `
 000000..  48 8b ec                  mov %rsp, %rbp
 000000..  66 41 0f 38 23 04 3f      pmovsxwdq \\(%r15,%rdi,1\\), %xmm0
@@ -80,6 +92,10 @@ if (!getBuildConfiguration().windows) {
 000000..  66 41 0f 38 35 04 3f      pmovzxdqq \\(%r15,%rdi,1\\), %xmm0
 000000..  5d                        pop %rbp
 `],
+<<<<<<< HEAD
+=======
+
+>>>>>>> c91326250905fde3723d1be11580675ba5f3c38a
     ] ) {
 
         let ins = wasmEvalText(`
