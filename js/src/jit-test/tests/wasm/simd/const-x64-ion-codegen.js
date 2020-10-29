@@ -70,11 +70,11 @@ for ( let [op, expected] of [
 `],
 
 ] ) {
-    let ins = new WebAssembly.Instance(new WebAssembly.Module(wasmTextToBinary(`
+    let ins = wasmEvalText(`
   (module
     (func (export "f") (result v128)
       (${op})))
-        `)));
+        `);
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;

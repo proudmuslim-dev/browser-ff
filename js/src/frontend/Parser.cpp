@@ -1994,6 +1994,7 @@ bool PerHandlerParser<SyntaxParseHandler>::finishFunction(
   }
   for (const ScriptAtom& binding : pc_->closedOverBindingsForLazy()) {
     if (binding) {
+      binding->markUsedByStencil();
       gcthings.infallibleAppend(AsVariant(binding));
     } else {
       gcthings.infallibleAppend(AsVariant(NullScriptThing()));
@@ -2390,6 +2391,8 @@ void GeneralParser<ParseHandler, Unit>::setFunctionStartAtPosition(
   uint32_t startLine, startColumn;
   tokenStream.computeLineAndColumn(pos.begin, &startLine, &startColumn);
 
+  // NOTE: `Debugger::CallData::findScripts` relies on sourceStart and
+  //       lineno/column referring to the same location.
   funbox->setStart(pos.begin, startLine, startColumn);
 }
 

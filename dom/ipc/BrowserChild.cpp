@@ -310,7 +310,6 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
       mLayersId{0},
       mEffectsInfo{EffectsInfo::FullyHidden()},
       mDidFakeShow(false),
-      mNotified(false),
       mTriedBrowserInit(false),
       mOrientation(hal::eScreenOrientation_PortraitPrimary),
       mIgnoreKeyPressEvent(false),
@@ -336,7 +335,6 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
       mShouldSendWebProgressEventsToParent(false),
       mRenderLayers(true),
       mPendingDocShellIsActive(false),
-      mPendingSuspendMediaWhenInactive(false),
       mPendingDocShellReceivedMessage(false),
       mPendingRenderLayers(false),
       mPendingRenderLayersReceivedMessage(false),
@@ -2459,10 +2457,6 @@ void BrowserChild::RemovePendingDocShellBlocker() {
     mPendingDocShellReceivedMessage = false;
     InternalSetDocShellIsActive(mPendingDocShellIsActive);
   }
-  if (!mPendingDocShellBlockers && mPendingSuspendMediaWhenInactive) {
-    mPendingSuspendMediaWhenInactive = false;
-    InternalSetSuspendMediaWhenInactive(mPendingSuspendMediaWhenInactive);
-  }
   if (!mPendingDocShellBlockers && mPendingRenderLayersReceivedMessage) {
     mPendingRenderLayersReceivedMessage = false;
     RecvRenderLayers(mPendingRenderLayers, mPendingLayersObserverEpoch);
@@ -2487,25 +2481,6 @@ mozilla::ipc::IPCResult BrowserChild::RecvSetDocShellIsActive(
   }
 
   InternalSetDocShellIsActive(aIsActive);
-  return IPC_OK();
-}
-
-void BrowserChild::InternalSetSuspendMediaWhenInactive(
-    bool aSuspendMediaWhenInactive) {
-  if (nsCOMPtr<nsIDocShell> docShell = do_GetInterface(WebNavigation())) {
-    docShell->SetSuspendMediaWhenInactive(aSuspendMediaWhenInactive);
-  }
-}
-
-mozilla::ipc::IPCResult BrowserChild::RecvSetSuspendMediaWhenInactive(
-    const bool& aSuspendMediaWhenInactive) {
-  if (mPendingDocShellBlockers > 0) {
-    mPendingDocShellReceivedMessage = true;
-    mPendingSuspendMediaWhenInactive = aSuspendMediaWhenInactive;
-    return IPC_OK();
-  }
-
-  InternalSetSuspendMediaWhenInactive(aSuspendMediaWhenInactive);
   return IPC_OK();
 }
 
@@ -2818,13 +2793,6 @@ void BrowserChild::InitAPZState() {
       new ContentProcessController(this);
   APZChild* apzChild = new APZChild(contentController);
   cbc->SendPAPZConstructor(apzChild, mLayersId);
-}
-
-void BrowserChild::NotifyPainted() {
-  if (!mNotified) {
-    SendNotifyCompositorTransaction();
-    mNotified = true;
-  }
 }
 
 IPCResult BrowserChild::RecvUpdateEffects(const EffectsInfo& aEffects) {

@@ -221,12 +221,6 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1506812
          "race:BeginBackgroundRead\n"
 
-         // Bug 1506910
-         "race:gMozillaPoisonValue\n"
-
-         // Bug 1600594
-         "race:nsThread::SizeOfEventQueues\n"
-
          // Bug 1601286
          "race:setFlagBit\n"
          "race:isFatInline\n"
@@ -258,48 +252,17 @@ extern "C" const char* __tsan_default_suppressions() {
          // Bug 1606800
          "race:CallInitFunc\n"
 
-         // Bug 1606803
-         "race:ipv6_is_present\n"
-
          // Bug 1606864
          "race:nsSocketTransport::Close\n"
          "race:nsSocketTransport::OnSocketDetached\n"
-
-         // Bug 1607138
-         "race:gXPCOMThreadsShutDown\n"
 
          // Bug 1607446
          "race:nsJARChannel::Suspend\n"
          "race:nsJARChannel::Resume\n"
 
-         // Bug 1607449
-         "race:fill_CERTCertificateFields\n"
-         "race:CERT_DestroyCertificate\n"
-
-         // Bug 1607588
-         "race:nssSlot_GetToken\n"
-         "race:nssToken_Destroy\n"
-
-         // Bug 1607704
-         "race:nsUrlClassifierDBServiceWorker::OpenDb\n"
-         "race:nsUrlClassifierDBServiceWorker::Shutdown\n"
-
-         // Bug 1607706
-         "race:TemporaryIPCBlobParent::CreateAndShareFile\n"
-
-         // Bug 1607762
-         "race:nsHtml5OwningUTF16Buffer::Release\n"
-
          // Bug 1608068
          "race:makeOwnBaseShape\n"
          "race:numDynamicSlots\n"
-
-         // Bug 1608357
-         "race:nsHtml5ExecutorFlusher::Run\n"
-         "race:geckoservo::glue::traverse_subtree\n"
-
-         // Bug 1608462
-         "deadlock:ScriptPreloader::OffThreadDecodeCallback\n"
 
          // Bug 1615017
          "race:CacheFileMetadata::SetHash\n"
@@ -318,10 +281,6 @@ extern "C" const char* __tsan_default_suppressions() {
 
          // Bug 1664803
          "race:Sampler::sSigHandlerCoordinator\n"
-
-         // Bug 1657739
-         "race:WebRtcAec_CreateAec\n"
-         "race:EchoSubtraction\n"
 
          // Bug 1656068
          "race:WebRtcAec_Create\n"

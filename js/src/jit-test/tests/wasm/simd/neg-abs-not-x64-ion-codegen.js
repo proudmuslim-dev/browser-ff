@@ -37,11 +37,11 @@ for ( let [ op, expected ] of [
 
 ] ) {
 
-    let ins = new WebAssembly.Instance(new WebAssembly.Module(wasmTextToBinary(`
+    let ins = wasmEvalText(`
   (module
     (func (export "f") (param v128) (param v128) (result v128)
       (${op} (local.get 1))))
-`)));
+`);
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;
@@ -80,11 +80,11 @@ for ( let [ op, expected ] of [
 000000..  5d                        pop %rbp
 `],
 ] ) {
-    var ins = new WebAssembly.Instance(new WebAssembly.Module(wasmTextToBinary(`
+    var ins = wasmEvalText(`
   (module
     (func (export "f") (param v128) (result v128)
       (${op} (local.get 0))))
-`)));
+`);
     let output = wasmDis(ins.exports.f, "ion", true);
     if (output.indexOf('No disassembly available') >= 0)
         continue;
