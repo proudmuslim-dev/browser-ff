@@ -5,7 +5,7 @@ project pages with documentation, [click here](https://firefox-source-docs.mozil
 
 - For information on how to build Firefox from the source code and create the patch, [click here](https://firefox-source-docs.mozilla.org/contributing/contribution_quickref.html)
 
-- If you have a question about developing Firefox, and can't find the solution on https://firefox-source-docs.mozilla.org/, you can try asking your question onMatrix at chat.mozilla.org in `Introduction` (https://chat.mozilla.org/#/room/#introduction:mozilla.org) channel.
+- If you have a question about developing Firefox, and can't find the solution on https://firefox-source-docs.mozilla.org/, you can try asking your question on Matrix at chat.mozilla.org in `Introduction` (https://chat.mozilla.org/#/room/#introduction:mozilla.org) channel.
 
 
 ## Download Links for Nightly Development Builds
