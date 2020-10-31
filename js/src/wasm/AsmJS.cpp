@@ -40,6 +40,7 @@
 #include "frontend/SharedContext.h"  // TopLevelFunction
 #include "gc/Policy.h"
 #include "js/BuildId.h"  // JS::BuildIdCharVector
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/MemoryMetrics.h"
 #include "js/Printf.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
@@ -6730,7 +6731,7 @@ static bool CheckBuffer(JSContext* cx, const AsmJSMetadata& metadata,
   }
 
   buffer.set(&AsAnyArrayBuffer(bufferVal));
-  uint64_t memoryLength = uint64_t(buffer->byteLength());
+  uint64_t memoryLength = uint64_t(ByteLength32(buffer));
 
   if (!IsValidAsmJSHeapLength(memoryLength)) {
     UniqueChars msg(JS_smprintf(

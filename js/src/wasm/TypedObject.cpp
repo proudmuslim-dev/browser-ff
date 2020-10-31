@@ -13,6 +13,7 @@
 
 #include "gc/Marking.h"
 #include "js/CharacterEncoding.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/PropertySpec.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/Vector.h"
@@ -1046,8 +1047,8 @@ OutlineTypedObject* OutlineTypedObject::createUnattached(JSContext* cx,
 }
 
 void OutlineTypedObject::attach(ArrayBufferObject& buffer, uint32_t offset) {
-  MOZ_ASSERT(offset <= buffer.byteLength());
-  MOZ_ASSERT(size() <= buffer.byteLength() - offset);
+  MOZ_ASSERT(offset <= wasm::ByteLength32(buffer));
+  MOZ_ASSERT(size() <= wasm::ByteLength32(buffer) - offset);
   MOZ_ASSERT(buffer.hasTypedObjectViews());
   MOZ_ASSERT(!buffer.isDetached());
 

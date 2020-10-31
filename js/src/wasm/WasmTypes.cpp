@@ -18,6 +18,7 @@
 
 #include "wasm/WasmTypes.h"
 
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/Printf.h"
 #include "util/Memory.h"
 #include "vm/ArrayBufferObject.h"
@@ -44,10 +45,6 @@ using mozilla::MakeEnumeratedRange;
 #    error "Not an expected configuration"
 #  endif
 #endif
-
-static_assert(MaxMemoryPages ==
-                  ArrayBufferObject::MaxBufferByteLength / PageSize,
-              "invariant");
 
 // All plausible targets must be able to do at least IEEE754 double
 // loads/stores, hence the lower limit of 8.  Some Intel processors support
@@ -605,10 +602,11 @@ size_t wasm::ComputeMappedSize(uint64_t maxSize) {
 
 /* static */
 DebugFrame* DebugFrame::from(Frame* fp) {
-  MOZ_ASSERT(fp->instance()->code().metadata().debugEnabled);
+  MOZ_ASSERT(
+      GetNearestEffectiveTls(fp)->instance->code().metadata().debugEnabled);
   auto* df =
       reinterpret_cast<DebugFrame*>((uint8_t*)fp - DebugFrame::offsetOfFrame());
-  MOZ_ASSERT(fp->instance() == df->instance());
+  MOZ_ASSERT(GetNearestEffectiveTls(fp)->instance == df->instance());
   return df;
 }
 
@@ -627,6 +625,10 @@ void DebugFrame::alignmentStaticAsserts() {
   // aware of possible problems.
   static_assert(sizeof(DebugFrame) % 16 == 0, "ARM64 SP alignment");
 #endif
+}
+
+Instance* DebugFrame::instance() const {
+  return GetNearestEffectiveTls(&frame_)->instance;
 }
 
 GlobalObject* DebugFrame::global() const {

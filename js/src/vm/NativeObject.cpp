@@ -19,6 +19,7 @@
 #include "gc/MaybeRooted.h"
 #include "jit/BaselineIC.h"
 #include "js/CharacterEncoding.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/StackLimits.h"  // js::CheckRecursionLimit{,DontReport}
 #include "js/Result.h"
 #include "js/Value.h"
@@ -293,7 +294,7 @@ void js::NativeObject::checkShapeConsistency() {
 }
 #endif
 
-void js::NativeObject::initializeSlotRange(uint32_t start, uint32_t length) {
+void js::NativeObject::initializeSlotRange(uint32_t start, uint32_t end) {
   /*
    * No bounds check, as this is used when the object's shape does not
    * reflect its allocated slots (updateSlotsForSpan).
@@ -302,7 +303,7 @@ void js::NativeObject::initializeSlotRange(uint32_t start, uint32_t length) {
   HeapSlot* fixedEnd;
   HeapSlot* slotsStart;
   HeapSlot* slotsEnd;
-  getSlotRangeUnchecked(start, length, &fixedStart, &fixedEnd, &slotsStart,
+  getSlotRangeUnchecked(start, end, &fixedStart, &fixedEnd, &slotsStart,
                         &slotsEnd);
 
   uint32_t offset = start;
@@ -314,15 +315,14 @@ void js::NativeObject::initializeSlotRange(uint32_t start, uint32_t length) {
   }
 }
 
-void js::NativeObject::initSlotRange(uint32_t start, const Value* vector,
-                                     uint32_t length) {
+void js::NativeObject::initSlots(const Value* vector, uint32_t length) {
   HeapSlot* fixedStart;
   HeapSlot* fixedEnd;
   HeapSlot* slotsStart;
   HeapSlot* slotsEnd;
-  getSlotRange(start, length, &fixedStart, &fixedEnd, &slotsStart, &slotsEnd);
+  getSlotRange(0, length, &fixedStart, &fixedEnd, &slotsStart, &slotsEnd);
 
-  uint32_t offset = start;
+  uint32_t offset = 0;
   for (HeapSlot* sp = fixedStart; sp < fixedEnd; sp++) {
     sp->init(this, HeapSlot::Slot, offset++, *vector++);
   }
