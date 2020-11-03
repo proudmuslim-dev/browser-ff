@@ -698,6 +698,7 @@ let JSWINDOWACTORS = {
 };
 
 (function earlyBlankFirstPaint() {
+  let startTime = Cu.now();
   if (
     AppConstants.platform == "macosx" ||
     !Services.prefs.getBoolPref("browser.startup.blankWindow", false)
@@ -778,6 +779,9 @@ let JSWINDOWACTORS = {
 
   // The window becomes visible after OnStopRequest, so make this happen now.
   win.stop();
+
+  ChromeUtils.addProfilerMarker("earlyBlankFirstPaint", startTime);
+  win.openTime = Cu.now();
 
   let { TelemetryTimestamps } = ChromeUtils.import(
     "resource://gre/modules/TelemetryTimestamps.jsm"
