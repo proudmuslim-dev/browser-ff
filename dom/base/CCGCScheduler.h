@@ -225,7 +225,8 @@ class CCGCScheduler {
   // garbage to cycle collect: either we just finished a GC, or the purple
   // buffer is getting really big, or it's getting somewhat big and it has been
   // too long since the last CC.
-  bool IsCCNeeded(uint32_t aSuspected, TimeStamp aNow = TimeStamp::Now()) const {
+  bool IsCCNeeded(uint32_t aSuspected,
+                  TimeStamp aNow = TimeStamp::Now()) const {
     return mNeedsFullCC || aSuspected > kCCPurpleLimit ||
            (aSuspected > kCCForcedPurpleLimit && mLastCCEndTime &&
             aNow - mLastCCEndTime > kCCForced);

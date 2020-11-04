@@ -856,9 +856,14 @@ bool AsyncPanZoomController::ArePointerEventsConsumable(
   bool pannableX = aBlock->TouchActionAllowsPanningX() &&
                    aBlock->GetOverscrollHandoffChain()->CanScrollInDirection(
                        this, ScrollDirection::eHorizontal);
-  bool pannableY = aBlock->TouchActionAllowsPanningY() &&
-                   aBlock->GetOverscrollHandoffChain()->CanScrollInDirection(
-                       this, ScrollDirection::eVertical);
+  bool pannableY =
+      (aBlock->TouchActionAllowsPanningY() &&
+       (aBlock->GetOverscrollHandoffChain()->CanScrollInDirection(
+            this, ScrollDirection::eVertical) ||
+        // In the case of the root APZC with any dynamic toolbar, it
+        // shoule be pannable if there is room moving the dynamic
+        // toolbar.
+        (IsRootContent() && CanScrollDownwardsWithDynamicToolbar())));
 
   bool pannable;
 
@@ -2200,6 +2205,18 @@ bool AsyncPanZoomController::CanScroll(ScrollDirection aDirection) const {
   }
   MOZ_ASSERT_UNREACHABLE("Invalid value");
   return false;
+}
+
+bool AsyncPanZoomController::CanScrollDownwardsWithDynamicToolbar() const {
+  MOZ_ASSERT(IsRootContent());
+
+  RecursiveMutexAutoLock lock(mRecursiveMutex);
+  return mY.CanScrollDownwardsWithDynamicToolbar();
+}
+
+bool AsyncPanZoomController::CanScrollDownwards() const {
+  RecursiveMutexAutoLock lock(mRecursiveMutex);
+  return mY.CanScrollTo(eSideBottom);
 }
 
 bool AsyncPanZoomController::IsContentOfHonouredTargetRightToLeft(
@@ -4740,6 +4757,14 @@ void AsyncPanZoomController::NotifyLayersUpdated(
     if (!Metrics().GetCompositionBounds().IsEqualEdges(
             aLayerMetrics.GetCompositionBounds())) {
       Metrics().SetCompositionBounds(aLayerMetrics.GetCompositionBounds());
+      needToReclampScroll = true;
+    }
+
+    if (Metrics().IsRootContent() &&
+        Metrics().GetCompositionSizeWithoutDynamicToolbar() !=
+            aLayerMetrics.GetCompositionSizeWithoutDynamicToolbar()) {
+      Metrics().SetCompositionSizeWithoutDynamicToolbar(
+          aLayerMetrics.GetCompositionSizeWithoutDynamicToolbar());
       needToReclampScroll = true;
     }
     Metrics().SetRootCompositionSize(aLayerMetrics.GetRootCompositionSize());
