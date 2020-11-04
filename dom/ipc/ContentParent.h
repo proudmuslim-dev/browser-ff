@@ -398,6 +398,7 @@ class ContentParent final
     return mLifecycleState == LifecycleState::LAUNCHING;
   }
   bool IsAlive() const override;
+  bool IsInitialized() const;
   bool IsDead() const { return mLifecycleState == LifecycleState::DEAD; }
 
   bool IsForBrowser() const { return mIsForBrowser; }
@@ -1451,6 +1452,7 @@ class ContentParent final
   bool mIsAPreallocBlocker;  // We called AddBlocker for this ContentParent
 
   nsCString mRemoteType;
+  nsCOMPtr<nsIPrincipal> mRemoteTypeIsolationPrincipal;
 
   ContentParentId mChildID;
   int32_t mGeolocationWatchID;
@@ -1501,6 +1503,7 @@ class ContentParent final
   enum class LifecycleState : uint8_t {
     LAUNCHING,
     ALIVE,
+    INITIALIZED,
     DEAD,
   };
 
