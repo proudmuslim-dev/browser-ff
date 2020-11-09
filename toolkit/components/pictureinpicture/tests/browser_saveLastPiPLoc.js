@@ -39,6 +39,20 @@ add_task(async () => {
         }
       }
 
+      // Used for clearing the size and location of the PiP window
+      const PLAYER_URI =
+        "chrome://global/content/pictureinpicture/player.xhtml";
+
+      // The PiP window now stores information between tests and needs to be
+      // cleared before the test begins
+      function clearSaved() {
+        let xulStore = Services.xulStore;
+        xulStore.setValue(PLAYER_URI, "picture-in-picture", "left", NaN);
+        xulStore.setValue(PLAYER_URI, "picture-in-picture", "top", NaN);
+        xulStore.setValue(PLAYER_URI, "picture-in-picture", "width", NaN);
+        xulStore.setValue(PLAYER_URI, "picture-in-picture", "height", NaN);
+      }
+
       function getAvailScreenSize(screen) {
         let screenLeft = {},
           screenTop = {},
@@ -94,6 +108,9 @@ add_task(async () => {
       // tab height
       // Used only for Linux as the PiP window has a tab
       let tabHeight = 35;
+
+      // clear already saved information
+      clearSaved();
 
       // Open PiP
       let pipWin = await triggerPictureInPicture(browser, "with-controls");
@@ -186,8 +203,9 @@ add_task(async () => {
       // cause the tests to failed in unexpected ways. Possibly caused by
       // bug 1594223 https://bugzilla.mozilla.org/show_bug.cgi?id=1594223
       if (AppConstants.platform != "linux") {
-        // Save height for when aspect ratio is changed
+        // Save width and height for when aspect ratio is changed
         height = pipWin.innerHeight;
+        width = pipWin.innerWidth;
 
         left = 200;
         top = 100;
@@ -201,12 +219,12 @@ add_task(async () => {
 
         checkIfEqual(pipWin.screenX, left, "Opened at last X location");
         checkIfEqual(pipWin.screenY, top, "Opened at last Y location");
-        checkIfEqual(pipWin.innerHeight, height, "Opened with previous height");
+        checkIfEqual(
+          pipWin.innerHeight,
         checkIfEqual(
           pipWin.innerWidth,
           height * (pipWin.innerWidth / pipWin.innerHeight),
           "Width is changed to adjust for aspect ration"
-        );
 
         left = 300;
         top = 300;

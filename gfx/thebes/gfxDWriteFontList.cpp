@@ -286,7 +286,11 @@ void gfxDWriteFontFamily::LocalizedName(nsACString& aLocalizedName) {
   nsAutoCString locale;
   // We use system locale here because it's what user expects to see.
   // See bug 1349454 for details.
-  OSPreferences::GetInstance()->GetSystemLocale(locale);
+  RefPtr<OSPreferences> osprefs = OSPreferences::GetInstanceAddRefed();
+  if (!osprefs) {
+    return;
+  }
+  osprefs->GetSystemLocale(locale);
 
   RefPtr<IDWriteLocalizedStrings> names;
 
@@ -1455,6 +1459,11 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
     SharedFontList()->SetFamilyNames(families);
     GetPrefsAndStartLoader();
   }
+
+  if (!SharedFontList()->Initialized()) {
+    return;
+  }
+
   GetDirectWriteSubstitutes();
   GetFontSubstitutes();
 }

@@ -12,6 +12,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/HelperMacros.h"
 #include "mozilla/glue/Debug.h"
 #include "mozilla/BaseProfilerMarkers.h"
 #include "mozilla/UniquePtr.h"
@@ -62,6 +63,13 @@ static const wchar_t kPreXULSkeletonUIKeyPath[] =
     L"\\" MOZ_APP_VENDOR L"\\" MOZ_APP_BASENAME L"\\PreXULSkeletonUISettings";
 
 static bool sPreXULSkeletonUIEnabled = false;
+// sPreXULSkeletonUIDisallowed means that we don't even have the capacity to
+// enable the skeleton UI, whether because we're on a platform that doesn't
+// support it or because we launched with command line arguments that we don't
+// support. Some of these situations are transient, so we want to make sure we
+// don't mess with registry values in these scenarios that we may use in
+// other scenarios in which the skeleton UI is actually enabled.
+static bool sPreXULSkeletonUIDisallowed = false;
 static HWND sPreXULSkeletonUIWindow;
 static LPWSTR const gStockApplicationIcon = MAKEINTRESOURCEW(32512);
 static LPWSTR const gIDCWait = MAKEINTRESOURCEW(32514);
@@ -127,6 +135,48 @@ static double sCSSToDevPixelScaling;
 
 static const int kAnimationCSSPixelsPerFrame = 21;
 static const int kAnimationCSSExtraWindowSize = 300;
+
+static const wchar_t* sEnabledRegSuffix = L"|Enabled";
+static const wchar_t* sScreenXRegSuffix = L"|ScreenX";
+static const wchar_t* sScreenYRegSuffix = L"|ScreenY";
+static const wchar_t* sWidthRegSuffix = L"|Width";
+static const wchar_t* sHeightRegSuffix = L"|Height";
+static const wchar_t* sMaximizedRegSuffix = L"|Maximized";
+static const wchar_t* sUrlbarHorizontalOffsetCSSRegSuffix =
+    L"|UrlbarHorizontalOffsetCSS";
+static const wchar_t* sUrlbarWidthCSSRegSuffix = L"|UrlbarWidthCSS";
+static const wchar_t* sCssToDevPixelScalingRegSuffix = L"|CssToDevPixelScaling";
+
+std::wstring GetRegValueName(const wchar_t* prefix, const wchar_t* suffix) {
+  std::wstring result(prefix);
+  result.append(suffix);
+  return result;
+}
+
+// This is paraphrased from WinHeaderOnlyUtils.h. The fact that this file is
+// included in standalone SpiderMonkey builds prohibits us from including that
+// file directly, and it hardly warrants its own header. Bug 1674920 tracks
+// only including this file for gecko-related builds.
+UniquePtr<wchar_t[]> GetBinaryPath() {
+  DWORD bufLen = MAX_PATH;
+  UniquePtr<wchar_t[]> buf;
+  while (true) {
+    buf = MakeUnique<wchar_t[]>(bufLen);
+    DWORD retLen = ::GetModuleFileNameW(nullptr, buf.get(), bufLen);
+    if (!retLen) {
+      return nullptr;
+    }
+
+    if (retLen == bufLen && ::GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+      bufLen *= 2;
+      continue;
+    }
+
+    break;
+  }
+
+  return buf;
+}
 
 // We could use nsAutoRegKey, but including nsWindowsHelpers.h causes build
 // failures in random places because we're in mozglue. Overall it should be
@@ -720,10 +770,156 @@ bool LoadGdi32AndUser32Procedures() {
   return true;
 }
 
-void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance) {
+// Strips "--", "-", and "/" from the front of the arg if one of those exists,
+// returning `arg + 2`, `arg + 1`, and `arg + 1` respectively. If none of these
+// prefixes are found, the argument is not a flag, and nullptr is returned.
+const char* NormalizeFlag(const char* arg) {
+  if (strstr(arg, "--") == arg) {
+    return arg + 2;
+  }
+
+  if (arg[0] == '-') {
+    return arg + 1;
+  }
+
+  if (arg[0] == '/') {
+    return arg + 1;
+  }
+
+  return nullptr;
+}
+
+// Ensures that we only see arguments in the command line which are acceptable.
+// This is based on manual inspection of the list of arguments listed in the MDN
+// page for Gecko/Firefox commandline options:
+// https://developer.mozilla.org/en-US/docs/Mozilla/Command_Line_Options
+// Broadly speaking, we want to reject any argument which causes us to show
+// something other than the default window at its normal size. Here is a non-
+// exhaustive list of command line options we want to *exclude*:
+//
+//   -ProfileManager : This will display the profile manager window, which does
+//                     not match the skeleton UI at all.
+//
+//   -CreateProfile  : This will display a firefox window with the default
+//                     screen position and size, and not the position and size
+//                     which we have recorded in the registry.
+//
+//   -P <profile>    : This could cause us to display firefox with a position
+//                     and size of a different profile than that in which we
+//                     were previously running.
+//
+//   -width, -height : This will cause the width and height values in the
+//                     registry to be incorrect.
+//
+//   -kiosk          : See above.
+//
+//   -headless       : This one should be rather obvious.
+//
+//   -migration      : This will start with the import wizard, which of course
+//                     does not match the skeleton UI.
+//
+//   -private-window : This is tricky, but the colors of the main content area
+//                     make this not feel great with the white content of the
+//                     default skeleton UI.
+//
+// NOTE: we generally want to skew towards erroneous rejections of the command
+// line rather than erroneous approvals. The consequence of a bad rejection
+// is that we don't show the skeleton UI, which is business as usual. The
+// consequence of a bad approval is that we show it when we're not supposed to,
+// which is visually jarring and can also be unpredictable - there's no
+// guarantee that the code which handles the non-default window is set up to
+// properly handle the transition from the skeleton UI window.
+bool AreAllCmdlineArgumentsApproved(int argc, char** argv) {
+  const char* approvedArgumentsList[] = {
+      // These won't cause the browser to be visualy different in any way
+      "new-instance", "no-remote", "browser", "foreground", "setDefaultBrowser",
+      "attach-console", "wait-for-browser", "osint",
+
+      // These will cause the chrome to be a bit different or extra windows to
+      // be created, but overall the skeleton UI should still be broadly
+      // correct enough.
+      "new-tab", "new-window",
+
+      // These will cause the content area to appear different, but won't
+      // meaningfully affect the chrome
+      "preferences", "search", "url",
+
+      // There are other arguments which are likely okay. However, they are
+      // not included here because this list is not intended to be
+      // exhaustive - it only intends to green-light some somewhat commonly
+      // used arguments. We want to err on the side of an unnecessary
+      // rejection of the command line.
+  };
+
+  // On local builds, we want to allow -profile, because it's how `mach run`
+  // operates, and excluding that would create an unnecessary blind spot for
+  // Firefox devs.
+  const char* releaseChannel = MOZ_STRINGIFY(MOZ_UPDATE_CHANNEL);
+  bool acceptProfileArgument = !strcmp(releaseChannel, "default");
+
+  const int numApproved =
+      sizeof(approvedArgumentsList) / sizeof(approvedArgumentsList[0]);
+  for (int i = 1; i < argc; ++i) {
+    const char* flag = NormalizeFlag(argv[i]);
+    if (!flag) {
+      // If this is not a flag, then we interpret it as a URL, similar to
+      // BrowserContentHandler.jsm. Some command line options take additional
+      // arguments, which may or may not be URLs. We don't need to know this,
+      // because we don't need to parse them out; we just rely on the
+      // assumption that if arg X is actually a parameter for the preceding
+      // arg Y, then X must not look like a flag (starting with "--", "-",
+      // or "/").
+      //
+      // The most important thing here is the assumption that if something is
+      // going to meaningfully alter the appearance of the window itself, it
+      // must be a flag.
+      continue;
+    }
+
+    // Just force true for marionette - tests are a special case where we
+    // want to ensure we accept things like -profile.
+    if (!strcmp(flag, "marionette")) {
+      return true;
+    }
+
+    if (acceptProfileArgument && !strcmp(flag, "profile")) {
+      continue;
+    }
+
+    bool approved = false;
+    for (int j = 0; j < numApproved; ++j) {
+      const char* approvedArg = approvedArgumentsList[j];
+      // We do a case-insensitive compare here with _stricmp. Even though some
+      // of these arguments are *not* read as case-insensitive, others *are*.
+      // Similar to the flag logic above, we don't really care about this
+      // distinction, because we don't need to parse the arguments - we just
+      // rely on the assumption that none of the listed flags in our
+      // approvedArgumentsList are overloaded in such a way that a different
+      // casing would visually alter the firefox window.
+      if (!_stricmp(flag, approvedArg)) {
+        approved = true;
+        break;
+      }
+    }
+
+    if (!approved) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance, int argc,
+                                    char** argv) {
 #ifdef MOZ_GECKO_PROFILER
   const TimeStamp skeletonStart = TimeStamp::NowUnfuzzed();
 #endif
+
+  if (!AreAllCmdlineArgumentsApproved(argc, argv)) {
+    sPreXULSkeletonUIDisallowed = true;
+    return;
+  }
 
   HKEY regKey;
   if (!IsWin10OrLater() || !OpenPreXULSkeletonUIRegKey(regKey)) {
@@ -731,11 +927,14 @@ void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance) {
   }
   AutoCloseRegKey closeKey(regKey);
 
+  UniquePtr<wchar_t[]> binPath = GetBinaryPath();
+
   DWORD dataLen = sizeof(uint32_t);
   uint32_t enabled;
-  LSTATUS result =
-      ::RegGetValueW(regKey, nullptr, L"enabled", RRF_RT_REG_DWORD, nullptr,
-                     reinterpret_cast<PBYTE>(&enabled), &dataLen);
+  LSTATUS result = ::RegGetValueW(
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sEnabledRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&enabled), &dataLen);
   if (result != ERROR_SUCCESS || enabled == 0) {
     return;
   }
@@ -768,41 +967,50 @@ void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance) {
   }
 
   uint32_t screenX;
-  result = ::RegGetValueW(regKey, nullptr, L"screenX", RRF_RT_REG_DWORD,
-                          nullptr, reinterpret_cast<PBYTE>(&screenX), &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sScreenXRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&screenX), &dataLen);
   if (result != ERROR_SUCCESS) {
     printf_stderr("Error reading screenX %lu\n", GetLastError());
     return;
   }
 
   uint32_t screenY;
-  result = ::RegGetValueW(regKey, nullptr, L"screenY", RRF_RT_REG_DWORD,
-                          nullptr, reinterpret_cast<PBYTE>(&screenY), &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sScreenYRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&screenY), &dataLen);
   if (result != ERROR_SUCCESS) {
     printf_stderr("Error reading screenY %lu\n", GetLastError());
     return;
   }
 
   uint32_t windowWidth;
-  result = ::RegGetValueW(regKey, nullptr, L"width", RRF_RT_REG_DWORD, nullptr,
-                          reinterpret_cast<PBYTE>(&windowWidth), &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr, GetRegValueName(binPath.get(), sWidthRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&windowWidth),
+      &dataLen);
   if (result != ERROR_SUCCESS) {
     printf_stderr("Error reading width %lu\n", GetLastError());
     return;
   }
 
   uint32_t windowHeight;
-  result = ::RegGetValueW(regKey, nullptr, L"height", RRF_RT_REG_DWORD, nullptr,
-                          reinterpret_cast<PBYTE>(&windowHeight), &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr, GetRegValueName(binPath.get(), sHeightRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&windowHeight),
+      &dataLen);
   if (result != ERROR_SUCCESS) {
     printf_stderr("Error reading height %lu\n", GetLastError());
     return;
   }
 
   uint32_t maximized;
-  result =
-      ::RegGetValueW(regKey, nullptr, L"maximized", RRF_RT_REG_DWORD, nullptr,
-                     reinterpret_cast<PBYTE>(&maximized), &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sMaximizedRegSuffix).c_str(),
+      RRF_RT_REG_DWORD, nullptr, reinterpret_cast<PBYTE>(&maximized), &dataLen);
   if (result != ERROR_SUCCESS) {
     printf_stderr("Error reading maximized %lu\n", GetLastError());
     return;
@@ -812,7 +1020,10 @@ void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance) {
   dataLen = sizeof(double);
   double urlbarHorizontalOffsetCSS;
   result = ::RegGetValueW(
-      regKey, nullptr, L"urlbarHorizontalOffsetCSS", RRF_RT_REG_BINARY, nullptr,
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sUrlbarHorizontalOffsetCSSRegSuffix)
+          .c_str(),
+      RRF_RT_REG_BINARY, nullptr,
       reinterpret_cast<PBYTE>(&urlbarHorizontalOffsetCSS), &dataLen);
   if (result != ERROR_SUCCESS || dataLen != sizeof(double)) {
     printf_stderr("Error reading urlbarHorizontalOffsetCSS %lu\n",
@@ -821,16 +1032,20 @@ void CreateAndStorePreXULSkeletonUI(HINSTANCE hInstance) {
   }
 
   double urlbarWidthCSS;
-  result = ::RegGetValueW(regKey, nullptr, L"urlbarWidthCSS", RRF_RT_REG_BINARY,
-                          nullptr, reinterpret_cast<PBYTE>(&urlbarWidthCSS),
-                          &dataLen);
+  result = ::RegGetValueW(
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sUrlbarWidthCSSRegSuffix).c_str(),
+      RRF_RT_REG_BINARY, nullptr, reinterpret_cast<PBYTE>(&urlbarWidthCSS),
+      &dataLen);
   if (result != ERROR_SUCCESS || dataLen != sizeof(double)) {
     printf_stderr("Error reading urlbarWidthCSS %lu\n", GetLastError());
     return;
   }
 
   result = ::RegGetValueW(
-      regKey, nullptr, L"cssToDevPixelScaling", RRF_RT_REG_BINARY, nullptr,
+      regKey, nullptr,
+      GetRegValueName(binPath.get(), sCssToDevPixelScalingRegSuffix).c_str(),
+      RRF_RT_REG_BINARY, nullptr,
       reinterpret_cast<PBYTE>(&sCSSToDevPixelScaling), &dataLen);
   if (result != ERROR_SUCCESS || dataLen != sizeof(double)) {
     printf_stderr("Error reading cssToDevPixelScaling %lu\n", GetLastError());
@@ -940,63 +1155,76 @@ void PersistPreXULSkeletonUIValues(int screenX, int screenY, int width,
   }
   AutoCloseRegKey closeKey(regKey);
 
+  UniquePtr<wchar_t[]> binPath = GetBinaryPath();
+
   LSTATUS result;
-  result = ::RegSetValueExW(regKey, L"screenX", 0, REG_DWORD,
-                            reinterpret_cast<PBYTE>(&screenX), sizeof(screenX));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sScreenXRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&screenX), sizeof(screenX));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting screenX to Windows registry\n");
     return;
   }
 
-  result = ::RegSetValueExW(regKey, L"screenY", 0, REG_DWORD,
-                            reinterpret_cast<PBYTE>(&screenY), sizeof(screenY));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sScreenYRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&screenY), sizeof(screenY));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting screenY to Windows registry\n");
     return;
   }
 
-  result = ::RegSetValueExW(regKey, L"width", 0, REG_DWORD,
-                            reinterpret_cast<PBYTE>(&width), sizeof(width));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sWidthRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&width), sizeof(width));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting width to Windows registry\n");
     return;
   }
 
-  result = ::RegSetValueExW(regKey, L"height", 0, REG_DWORD,
-                            reinterpret_cast<PBYTE>(&height), sizeof(height));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sHeightRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&height), sizeof(height));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting height to Windows registry\n");
     return;
   }
 
   DWORD maximizedDword = maximized ? 1 : 0;
-  result = ::RegSetValueExW(regKey, L"maximized", 0, REG_DWORD,
-                            reinterpret_cast<PBYTE>(&maximizedDword),
-                            sizeof(maximizedDword));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sMaximizedRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&maximizedDword),
+      sizeof(maximizedDword));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting maximized to Windows registry\n");
   }
 
-  result = ::RegSetValueExW(regKey, L"urlbarHorizontalOffsetCSS", 0, REG_BINARY,
-                            reinterpret_cast<PBYTE>(&urlbarHorizontalOffsetCSS),
-                            sizeof(urlbarHorizontalOffsetCSS));
+  result = ::RegSetValueExW(
+      regKey,
+      GetRegValueName(binPath.get(), sUrlbarHorizontalOffsetCSSRegSuffix)
+          .c_str(),
+      0, REG_BINARY, reinterpret_cast<PBYTE>(&urlbarHorizontalOffsetCSS),
+      sizeof(urlbarHorizontalOffsetCSS));
   if (result != ERROR_SUCCESS) {
     printf_stderr(
         "Failed persisting urlbarHorizontalOffsetCSS to Windows registry\n");
     return;
   }
 
-  result = ::RegSetValueExW(regKey, L"urlbarWidthCSS", 0, REG_BINARY,
-                            reinterpret_cast<PBYTE>(&urlbarWidthCSS),
-                            sizeof(urlbarWidthCSS));
+  result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sUrlbarWidthCSSRegSuffix).c_str(),
+      0, REG_BINARY, reinterpret_cast<PBYTE>(&urlbarWidthCSS),
+      sizeof(urlbarWidthCSS));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting urlbarWidthCSS to Windows registry\n");
     return;
   }
 
-  result = ::RegSetValueExW(regKey, L"cssToDevPixelScaling", 0, REG_BINARY,
-                            reinterpret_cast<PBYTE>(&cssToDevPixelScaling),
-                            sizeof(cssToDevPixelScaling));
+  result = ::RegSetValueExW(
+      regKey,
+      GetRegValueName(binPath.get(), sCssToDevPixelScalingRegSuffix).c_str(), 0,
+      REG_BINARY, reinterpret_cast<PBYTE>(&cssToDevPixelScaling),
+      sizeof(cssToDevPixelScaling));
   if (result != ERROR_SUCCESS) {
     printf_stderr(
         "Failed persisting cssToDevPixelScaling to Windows registry\n");
@@ -1006,22 +1234,38 @@ void PersistPreXULSkeletonUIValues(int screenX, int screenY, int width,
 
 MFBT_API bool GetPreXULSkeletonUIEnabled() { return sPreXULSkeletonUIEnabled; }
 
-MFBT_API void SetPreXULSkeletonUIEnabled(bool value) {
+MFBT_API void SetPreXULSkeletonUIEnabledIfAllowed(bool value) {
+  // If the pre-XUL skeleton UI was disallowed for some reason, we just want to
+  // ignore changes to the registry. An example of how things could be bad if
+  // we didn't: someone running firefox with the -profile argument could
+  // turn the skeleton UI on or off for the default profile. Turning it off
+  // maybe isn't so bad (though it's likely still incorrect), but turning it
+  // on could be bad if the user had specifically disabled it for a profile for
+  // some reason. Ultimately there's no correct decision here, and the
+  // messiness of this is just a consequence of sharing the registry values
+  // across profiles. However, whatever ill effects we observe should be
+  // correct themselves after one session.
+  if (sPreXULSkeletonUIDisallowed) {
+    return;
+  }
+
   HKEY regKey;
   if (!OpenPreXULSkeletonUIRegKey(regKey)) {
     return;
   }
   AutoCloseRegKey closeKey(regKey);
+
+  UniquePtr<wchar_t[]> binPath = GetBinaryPath();
   DWORD enabled = value;
-  LSTATUS result =
-      ::RegSetValueExW(regKey, L"enabled", 0, REG_DWORD,
-                       reinterpret_cast<PBYTE>(&enabled), sizeof(enabled));
+  LSTATUS result = ::RegSetValueExW(
+      regKey, GetRegValueName(binPath.get(), sEnabledRegSuffix).c_str(), 0,
+      REG_DWORD, reinterpret_cast<PBYTE>(&enabled), sizeof(enabled));
   if (result != ERROR_SUCCESS) {
     printf_stderr("Failed persisting enabled to Windows registry\n");
     return;
   }
 
-  sPreXULSkeletonUIEnabled = true;
+  sPreXULSkeletonUIEnabled = value;
 }
 
 MFBT_API void PollPreXULSkeletonUIEvents() {
