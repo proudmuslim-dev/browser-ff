@@ -45,6 +45,7 @@
 #include "jit/JitOptions.h"
 #include "jit/JitRuntime.h"
 #include "js/CompileOptions.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/MemoryMetrics.h"
 #include "js/Printf.h"
 #include "js/SourceText.h"
@@ -3647,7 +3648,7 @@ bool PrivateScriptData::InitFromStencil(
     js::frontend::CompilationInfo& compilationInfo,
     js::frontend::CompilationGCOutput& gcOutput,
     const frontend::ScriptStencil& scriptStencil) {
-  uint32_t ngcthings = scriptStencil.gcThings.length();
+  uint32_t ngcthings = scriptStencil.gcThings.size();
 
   MOZ_ASSERT(ngcthings <= INDEX_LIMIT);
 
@@ -3791,7 +3792,7 @@ bool JSScript::fullyInitFromStencil(
   });
 
   /* The counts of indexed things must be checked during code generation. */
-  MOZ_ASSERT(scriptStencil.gcThings.length() <= INDEX_LIMIT);
+  MOZ_ASSERT(scriptStencil.gcThings.size() <= INDEX_LIMIT);
 
   // Note: These flags should already be correct when the BaseScript was
   // allocated.

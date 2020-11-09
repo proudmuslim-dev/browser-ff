@@ -941,9 +941,14 @@ nsresult nsChildView::SynthesizeNativeMouseScrollEvent(
   CGScrollEventUnit units = (aAdditionalFlags & nsIDOMWindowUtils::MOUSESCROLL_SCROLL_LINES)
                                 ? kCGScrollEventUnitLine
                                 : kCGScrollEventUnitPixel;
-  CGEventRef cgEvent = CGEventCreateScrollWheelEvent(NULL, units, 3, aDeltaY, aDeltaX, aDeltaZ);
+  CGEventRef cgEvent = CGEventCreateScrollWheelEvent(NULL, units, 3, (int32_t)aDeltaY,
+                                                     (int32_t)aDeltaX, (int32_t)aDeltaZ);
   if (!cgEvent) {
     return NS_ERROR_FAILURE;
+  }
+
+  if (aNativeMessage) {
+    CGEventSetIntegerValueField(cgEvent, kCGScrollWheelEventScrollPhase, aNativeMessage);
   }
 
   // On macOS 10.14 and up CGEventPost won't work because of changes in macOS
@@ -2374,8 +2379,7 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
            selector:@selector(systemMetricsChanged)
                name:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
              object:nil];
-  } else if (nsCocoaFeatures::OnYosemiteOrLater() &&
-             NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification) {
+  } else if (NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification) {
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(systemMetricsChanged)
@@ -2903,7 +2907,7 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
   usingElCapitanOrLaterSDK = false;
 #endif
 
-  if (nsCocoaFeatures::OnElCapitanOrLater() && usingElCapitanOrLaterSDK) {
+  if (usingElCapitanOrLaterSDK) {
     if (aEvent.phase == NSEventPhaseBegan) {
       [self beginGestureWithEvent:aEvent];
       return true;
@@ -3370,7 +3374,7 @@ static int32_t RoundUp(double aDouble) {
 }
 
 static gfx::IntPoint GetIntegerDeltaForEvent(NSEvent* aEvent) {
-  if (nsCocoaFeatures::OnSierraOrLater() && [aEvent hasPreciseScrollingDeltas]) {
+  if ([aEvent hasPreciseScrollingDeltas]) {
     // Pixel scroll events (events with hasPreciseScrollingDeltas == YES)
     // carry pixel deltas in the scrollingDeltaX/Y fields and line scroll
     // information in the deltaX/Y fields.

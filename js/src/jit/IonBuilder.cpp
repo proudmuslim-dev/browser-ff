@@ -25,6 +25,7 @@
 #include "jit/Lowering.h"
 #include "jit/MIRGraph.h"
 #include "js/experimental/JitInfo.h"  // JSJitInfo
+#include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "js/Object.h"                // JS::GetReservedSlot
 #include "js/ScalarType.h"            // js::Scalar::Type
 #include "util/CheckedArithmetic.h"
@@ -5158,31 +5159,18 @@ MDefinition* IonBuilder::createThisScripted(MDefinition* callee,
   // explicit operation in the bytecode, we cannot use resumeAfter().
   // Getters may not override |prototype| fetching, so this operation is
   // indeed idempotent.
-  // - First try an idempotent property cache.
-  // - Upon failing idempotent property cache, we can't use a non-idempotent
-  //   cache, therefore we fallback to CallGetProperty
   //
-  // Note: both CallGetProperty and GetPropertyCache can trigger a GC,
-  //       and thus invalidation.
-  MInstruction* getProto;
-  if (!invalidatedIdempotentCache()) {
-    MConstant* id = constant(StringValue(names().prototype));
-    MGetPropertyCache* getPropCache =
-        MGetPropertyCache::New(alloc(), newTarget, id,
-                               /* monitored = */ false);
-    getPropCache->setIdempotent();
-    getProto = getPropCache;
-  } else {
-    MCallGetProperty* callGetProp =
-        MCallGetProperty::New(alloc(), newTarget, names().prototype);
-    callGetProp->setIdempotent();
-    getProto = callGetProp;
-  }
-  current->add(getProto);
+  // Note: GetPropertyCache can trigger a GC, and thus invalidation.
+  MConstant* id = constant(StringValue(names().prototype));
+  MGetPropertyCache* getPropCache =
+      MGetPropertyCache::New(alloc(), newTarget, id,
+                              /* monitored = */ false);
+  getPropCache->setIdempotent();
+  current->add(getPropCache);
 
   // Create this from prototype
   MCreateThisWithProto* createThis =
-      MCreateThisWithProto::New(alloc(), callee, newTarget, getProto);
+      MCreateThisWithProto::New(alloc(), callee, newTarget, getPropCache);
   current->add(createThis);
 
   return createThis;
@@ -8889,7 +8877,8 @@ TypedArrayObject* IonBuilder::tryTypedArrayEmbedConstantElements(
   // TypedArrays are only singletons when created with a (Shared)ArrayBuffer
   // and a length greater or equal to |SINGLETON_BYTE_LENGTH|.
   MOZ_ASSERT(tarr->hasBuffer());
-  MOZ_ASSERT(tarr->byteLength() >= TypedArrayObject::SINGLETON_BYTE_LENGTH ||
+  MOZ_ASSERT(tarr->byteLength().get() >=
+                 TypedArrayObject::SINGLETON_BYTE_LENGTH ||
              tarr->hasDetachedBuffer());
 
   // TypedArrays using an ArrayBuffer don't have nursery-allocated data, see
@@ -8922,7 +8911,7 @@ void IonBuilder::addTypedArrayLengthAndData(MDefinition* obj,
 
     obj->setImplicitlyUsedUnchecked();
 
-    int32_t len = AssertedCast<int32_t>(tarr->length());
+    int32_t len = AssertedCast<int32_t>(tarr->length().deprecatedGetUint32());
     *length = MConstant::New(alloc(), Int32Value(len));
     current->add(*length);
 
@@ -8990,7 +8979,8 @@ MInstruction* IonBuilder::addTypedArrayByteOffset(MDefinition* obj) {
   if (TypedArrayObject* tarr = tryTypedArrayEmbedConstantElements(obj)) {
     obj->setImplicitlyUsedUnchecked();
 
-    int32_t offset = AssertedCast<int32_t>(tarr->byteOffset());
+    int32_t offset =
+        AssertedCast<int32_t>(tarr->byteOffset().deprecatedGetUint32());
     byteOffset = MConstant::New(alloc(), Int32Value(offset));
   } else {
     byteOffset = MArrayBufferViewByteOffset::New(alloc(), obj);

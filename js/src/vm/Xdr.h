@@ -45,8 +45,6 @@ using XDRResult = XDRResultT<mozilla::Ok>;
 using XDRAtomTable = JS::GCVector<PreBarriered<JSAtom*>>;
 using XDRAtomMap = JS::GCHashMap<PreBarriered<JSAtom*>, uint32_t>;
 
-using XDRParserAtomTable =
-    Vector<const frontend::ParserAtom*, 0, SystemAllocPolicy>;
 using XDRParserAtomMap = HashMap<const frontend::ParserAtom*, uint32_t>;
 
 class XDRBufferBase {
@@ -275,13 +273,10 @@ class XDRState : public XDRCoderBase {
 
   virtual bool hasAtomTable() const { return false; }
   virtual XDRAtomTable& atomTable() { MOZ_CRASH("does not have atomTable"); }
-  virtual frontend::ParserAtomsTable& frontendAtoms() {
+  virtual frontend::ParserAtomVectorBuilder& frontendAtoms() {
     MOZ_CRASH("does not have frontendAtoms");
   }
-  virtual XDRParserAtomTable& parserAtomTable() {
-    // This accessor is only used when encoding stencils.
-    MOZ_CRASH("does not have parserAtomTable");
-  }
+  virtual LifoAlloc& stencilAlloc() { MOZ_CRASH("does not have stencilAlloc"); }
   virtual void finishAtomTable() { MOZ_CRASH("does not have atomTable"); }
 
   virtual bool isMainBuf() { return true; }
@@ -521,20 +516,14 @@ class XDRStencilDecoder : public XDRDecoderBase {
 
  public:
   XDRStencilDecoder(JSContext* cx, const JS::ReadOnlyCompileOptions* options,
-                    JS::TranscodeBuffer& buffer, size_t cursor,
-                    frontend::ParserAtomsTable& parserAtoms)
-      : XDRDecoderBase(cx, buffer, cursor),
-        options_(options),
-        parserAtoms_(&parserAtoms) {
+                    JS::TranscodeBuffer& buffer, size_t cursor)
+      : XDRDecoderBase(cx, buffer, cursor), options_(options) {
     MOZ_ASSERT(options_);
   }
 
   XDRStencilDecoder(JSContext* cx, const JS::ReadOnlyCompileOptions* options,
-                    const JS::TranscodeRange& range,
-                    frontend::ParserAtomsTable& parserAtoms)
-      : XDRDecoderBase(cx, range),
-        options_(options),
-        parserAtoms_(&parserAtoms) {
+                    const JS::TranscodeRange& range)
+      : XDRDecoderBase(cx, range), options_(options) {
     MOZ_ASSERT(options_);
   }
 
@@ -543,8 +532,10 @@ class XDRStencilDecoder : public XDRDecoderBase {
   bool isForStencil() const override { return true; }
 
   bool hasAtomTable() const override { return hasFinishedAtomTable_; }
-  frontend::ParserAtomsTable& frontendAtoms() override { return *parserAtoms_; }
-  XDRParserAtomTable& parserAtomTable() override { return parserAtomTable_; }
+  frontend::ParserAtomVectorBuilder& frontendAtoms() override {
+    return *parserAtomBuilder_;
+  }
+  LifoAlloc& stencilAlloc() override { return *stencilAlloc_; }
   void finishAtomTable() override { hasFinishedAtomTable_ = true; }
 
   bool hasOptions() const override { return true; }
@@ -554,9 +545,9 @@ class XDRStencilDecoder : public XDRDecoderBase {
 
  private:
   const JS::ReadOnlyCompileOptions* options_;
-  XDRParserAtomTable parserAtomTable_;
   bool hasFinishedAtomTable_ = false;
-  frontend::ParserAtomsTable* parserAtoms_;
+  frontend::ParserAtomVectorBuilder* parserAtomBuilder_ = nullptr;
+  LifoAlloc* stencilAlloc_ = nullptr;
 };
 
 class XDROffThreadDecoder : public XDRDecoder {

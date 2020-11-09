@@ -110,19 +110,18 @@ class UrlbarInput {
     this._suppressPrimaryAdjustment = false;
     this._untrimmedValue = "";
 
-    // Search modes are per browser and are stored in this map.  For a given
-    // browser, search mode can be in preview mode, non-preview mode, or both.
+    // Search modes are per browser and are stored in this map.  For a
+    // browser, search mode can be in preview mode, confirmed, or both.
     // Typically, search mode is entered in preview mode with a particular
-    // source and is promoted to non-preview mode with the same source once a
-    // query starts.  It's also possible for a non-preview mode to be replaced
-    // with a preview mode with a different source, and in those cases, we need
-    // to be able to restore the non-preview mode when preview mode is exited.
-    // In addition, only non-preview mode should be restored across sessions.
-    // We therefore need to keep track of both the current non-preview and
-    // preview modes, per browser.
+    // source and is confirmed with the same source once a query starts.  It's
+    // also possible for a confirmed search mode to be replaced with a preview
+    // mode with a different source, and in those cases, we need to re-confirm
+    // search mode when preview mode is exited. In addition, only confirmed
+    // search modes should be restored across sessions. We therefore need to
+    // keep track of both the current confirmed and preview modes, per browser.
     //
     // For each browser with a search mode, this maps the browser to an object
-    // like this: { preview, nonPreview }.  Both `preview` and `nonPreview` are
+    // like this: { preview, confirmed }.  Both `preview` and `confirmed` are
     // search mode objects; see the setSearchMode documentation.  Either one may
     // be undefined if that particular mode is not active for the browser.
     this._searchModesByBrowser = new WeakMap();
@@ -266,11 +265,20 @@ class UrlbarInput {
 
   /**
    * Applies styling to the text in the urlbar input, depending on the text.
+   *
+   * @param {boolean} [forceURLFormat]
+   *        Whether to format URLs even when conditions forbid it,
+   *        for example when pageproxystate is not valid.
    */
-  formatValue() {
+  formatValue(forceURLFormat = false) {
+    // If the selected browser is now loading, avoid reformatting.
+    if (!forceURLFormat && this.window.gBrowser.selectedBrowser._isURLLoading) {
+      return;
+    }
+
     // The editor may not exist if the toolbar is not visible.
     if (this.editor) {
-      this.valueFormatter.update();
+      this.valueFormatter.update(forceURLFormat);
     }
   }
 
@@ -314,6 +322,8 @@ class UrlbarInput {
    *        otherwise.
    */
   setURI(uri = null, dueToTabSwitch = false) {
+    this.window.gBrowser.selectedBrowser._isURLLoading = false;
+
     let value = this.window.gBrowser.userTypedValue;
     let valid = false;
 
@@ -340,7 +350,7 @@ class UrlbarInput {
       } else {
         // We should deal with losslessDecodeURI throwing for exotic URIs
         try {
-          value = losslessDecodeURI(uri);
+          value = UrlbarUtils.losslessDecodeURI(uri);
         } catch (ex) {
           value = "about:blank";
         }
@@ -356,6 +366,10 @@ class UrlbarInput {
       valid = true;
     }
 
+    // The proxystate must be set before setting search mode and setting value
+    // below because search mode and formatting value depend on it.
+    this.setPageProxyState(valid ? "valid" : "invalid", dueToTabSwitch);
+
     let isDifferentValidValue = valid && value != this.untrimmedValue;
     this.value = value;
     this.valueIsTyped = !valid;
@@ -365,10 +379,6 @@ class UrlbarInput {
       // cursor position when the user switches windows while typing.
       this.selectionStart = this.selectionEnd = 0;
     }
-
-    // The proxystate must be set before setting search mode below because
-    // search mode depends on it.
-    this.setPageProxyState(valid ? "valid" : "invalid", dueToTabSwitch);
 
     // If we're switching tabs, restore the tab's search mode.  Otherwise, if
     // the URI is valid, exit search mode.  This must happen after setting
@@ -678,17 +688,17 @@ class UrlbarInput {
 
     // When update2 is enabled and a one-off is selected, we restyle URL
     // heuristic results to look like search results. In the unlikely event that
-    // they are clicked, we promote search mode instead of navigating to the
+    // they are clicked, we confirm search mode instead of navigating to the
     // URL. This was agreed on as a compromise between consistent UX and
     // engineering effort. See review discussion at bug 1667766.
-    let urlResultWillPromoteSearchMode =
+    let urlResultWillConfirmSearchMode =
       this.searchMode &&
       result.heuristic &&
       result.type == UrlbarUtils.RESULT_TYPE.URL &&
       this.view.oneOffSearchButtons.selectedButton;
 
     let selIndex = result.rowIndex;
-    if (!result.payload.keywordOffer && !urlResultWillPromoteSearchMode) {
+    if (!result.payload.keywordOffer && !urlResultWillConfirmSearchMode) {
       this.view.close(/* elementPicked */ true);
     }
 
@@ -716,8 +726,8 @@ class UrlbarInput {
 
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.URL: {
-        if (urlResultWillPromoteSearchMode) {
-          this.promoteSearchMode();
+        if (urlResultWillConfirmSearchMode) {
+          this.confirmSearchMode();
           this.search(this.value);
           return;
         }
@@ -903,7 +913,7 @@ class UrlbarInput {
         this.handleRevert();
         this.controller.engagementEvent.record(event, {
           selIndex,
-          numChars: this._lastSearchString.length,
+          searchString: this._lastSearchString,
           selType: this.controller.engagementEvent.typeFromElement(element),
           provider: result.providerName,
         });
@@ -1065,7 +1075,7 @@ class UrlbarInput {
       // Only preview search mode if the result is selected.
       if (this.view.resultIsSelected(result)) {
         // Not starting a query means we will only preview search mode.
-        enteredSearchMode = this.maybePromoteResultToSearchMode({
+        enteredSearchMode = this.maybeConfirmSearchModeFromResult({
           result,
           checkValue: false,
           startQuery: false,
@@ -1169,7 +1179,7 @@ class UrlbarInput {
       firstResult.heuristic &&
       firstResult.payload.keyword &&
       !firstResult.payload.keywordOffer &&
-      this.maybePromoteResultToSearchMode({
+      this.maybeConfirmSearchModeFromResult({
         result: firstResult,
         entry: "typed",
         checkValue: false,
@@ -1265,7 +1275,7 @@ class UrlbarInput {
     };
 
     if (this.searchMode) {
-      this.promoteSearchMode();
+      this.confirmSearchMode();
       options.searchMode = this.searchMode;
       if (this.searchMode.source) {
         options.sources = [this.searchMode.source];
@@ -1384,24 +1394,24 @@ class UrlbarInput {
    *
    * @param {Browser} browser
    *   The search mode for this browser will be returned.
-   * @param {boolean} [nonPreviewOnly]
-   *   Normally, if the browser has both preview and non-preview modes, preview
+   * @param {boolean} [confirmedOnly]
+   *   Normally, if the browser has both preview and confirmed modes, preview
    *   mode will be returned since it takes precedence.  If this argument is
-   *   true, then only non-preview mode will be returned, or null if non-preview
-   *   mode isn't active.
+   *   true, then only confirmed search mode will be returned, or null if
+   *   search mode hasn't been confirmed.
    * @returns {object}
    *   A search mode object.  See setSearchMode documentation.  If the browser
    *   is not in search mode, then null is returned.
    */
-  getSearchMode(browser, nonPreviewOnly = false) {
+  getSearchMode(browser, confirmedOnly = false) {
     let modes = this._searchModesByBrowser.get(browser);
 
     // Return copies so that callers don't modify the stored values.
-    if (!nonPreviewOnly && modes?.preview) {
+    if (!confirmedOnly && modes?.preview) {
       return { ...modes.preview };
     }
-    if (modes?.nonPreview) {
-      return { ...modes.nonPreview };
+    if (modes?.confirmed) {
+      return { ...modes.confirmed };
     }
     return null;
   }
@@ -1484,7 +1494,7 @@ class UrlbarInput {
       // Add the search mode to the map.
       if (!searchMode.isPreview) {
         this._searchModesByBrowser.set(browser, {
-          nonPreview: searchMode,
+          confirmed: searchMode,
         });
       } else {
         let modes = this._searchModesByBrowser.get(browser) || {};
@@ -1515,7 +1525,7 @@ class UrlbarInput {
     let modes = this._searchModesByBrowser.get(
       this.window.gBrowser.selectedBrowser
     );
-    this.searchMode = modes?.nonPreview;
+    this.searchMode = modes?.confirmed;
   }
 
   /**
@@ -1539,9 +1549,9 @@ class UrlbarInput {
   }
 
   /**
-   * Promotes the current search mode from preview mode to full search mode.
+   * Confirms the current search mode.
    */
-  promoteSearchMode() {
+  confirmSearchMode() {
     let searchMode = this.searchMode;
     if (searchMode?.isPreview) {
       searchMode.isPreview = false;
@@ -1721,13 +1731,13 @@ class UrlbarInput {
   }
 
   /**
-   * Enters search mode and starts a new search if appropriate for the given
+   * Confirms search mode and starts a new search if appropriate for the given
    * result.  See also _searchModeForResult.
    *
    * @param {string} entry
    *   The search mode entry point. See setSearchMode documentation for details.
    * @param {UrlbarResult} [result]
-   *   The result to promote. Defaults to the currently selected result.
+   *   The result to confirm. Defaults to the currently selected result.
    * @param {boolean} [checkValue]
    *   If true, the trimmed input value must equal the result's keyword in order
    *   to enter search mode.
@@ -1736,7 +1746,7 @@ class UrlbarInput {
    * @returns {boolean}
    *   True if we entered search mode and false if not.
    */
-  maybePromoteResultToSearchMode({
+  maybeConfirmSearchModeFromResult({
     entry,
     result = this._resultForCurrentValue,
     checkValue = true,
@@ -1882,7 +1892,7 @@ class UrlbarInput {
     });
   }
 
-  _setValue(val, allowTrim) {
+  _setValue(val, allowTrim, forceURLFormat = false) {
     // Don't expose internal about:reader URLs to the user.
     let originalUrl = ReaderMode.getOriginalUrlObjectForDisplay(val);
     if (originalUrl) {
@@ -1897,7 +1907,7 @@ class UrlbarInput {
     this.valueIsTyped = false;
     this._resultForCurrentValue = null;
     this.inputField.value = val;
-    this.formatValue();
+    this.formatValue(forceURLFormat);
     this.removeAttribute("actiontype");
 
     // Dispatch ValueChange event for accessibility.
@@ -1927,7 +1937,7 @@ class UrlbarInput {
     try {
       let uri = Services.io.newURI(result.payload.url);
       if (uri) {
-        return losslessDecodeURI(uri);
+        return UrlbarUtils.losslessDecodeURI(uri);
       }
     } catch (ex) {}
 
@@ -2235,6 +2245,7 @@ class UrlbarInput {
     // and only if we get a keyboard event, to match user expectations.
     if (
       !(event instanceof KeyboardEvent) ||
+      event._disableCanonization ||
       !event.ctrlKey ||
       !UrlbarPrefs.get("ctrlCanonizesURLs") ||
       !/^\s*[^.:\/\s]+(?:\/.*|\s*)$/i.test(value)
@@ -2323,7 +2334,8 @@ class UrlbarInput {
   ) {
     // No point in setting these because we'll handleRevert() a few rows below.
     if (openUILinkWhere == "current") {
-      this.value = url;
+      browser._isURLLoading = true;
+      this._setValue(url, true, true);
       browser.userTypedValue = url;
     }
 
@@ -2748,6 +2760,7 @@ class UrlbarInput {
       this._keyDownEnterDeferred.resolve();
       this._keyDownEnterDeferred = null;
     }
+    this._isKeyDownWithCtrl = false;
 
     Services.obs.notifyObservers(null, "urlbar-blur");
   }
@@ -3080,6 +3093,9 @@ class UrlbarInput {
         this._keyDownEnterDeferred.reject();
       }
       this._keyDownEnterDeferred = PromiseUtils.defer();
+      event._disableCanonization = this._isKeyDownWithCtrl;
+    } else if (event.keyCode !== KeyEvent.DOM_VK_CONTROL && event.ctrlKey) {
+      this._isKeyDownWithCtrl = true;
     }
 
     // Due to event deferring, it's possible preventDefault() won't be invoked
@@ -3115,6 +3131,8 @@ class UrlbarInput {
       }
       this._keyDownEnterDeferred = null;
       return;
+    } else if (event.keyCode === KeyEvent.DOM_VK_CONTROL) {
+      this._isKeyDownWithCtrl = false;
     }
 
     this._toggleActionOverride(event);
@@ -3279,94 +3297,6 @@ function getDroppableData(event) {
   }
   // Handle as text.
   return event.dataTransfer.getData("text/unicode");
-}
-
-/**
- * Decodes the given URI for displaying it in the address bar without losing
- * information, such that hitting Enter again will load the same URI.
- *
- * @param {nsIURI} aURI
- *   The URI to decode
- * @returns {string}
- *   The decoded URI
- */
-function losslessDecodeURI(aURI) {
-  let scheme = aURI.scheme;
-  let value = aURI.displaySpec;
-
-  // Try to decode as UTF-8 if there's no encoding sequence that we would break.
-  if (!/%25(?:3B|2F|3F|3A|40|26|3D|2B|24|2C|23)/i.test(value)) {
-    let decodeASCIIOnly = !["https", "http", "file", "ftp"].includes(scheme);
-    if (decodeASCIIOnly) {
-      // This only decodes ascii characters (hex) 20-7e, except 25 (%).
-      // This avoids both cases stipulated below (%-related issues, and \r, \n
-      // and \t, which would be %0d, %0a and %09, respectively) as well as any
-      // non-US-ascii characters.
-      value = value.replace(
-        /%(2[0-4]|2[6-9a-f]|[3-6][0-9a-f]|7[0-9a-e])/g,
-        decodeURI
-      );
-    } else {
-      try {
-        value = decodeURI(value)
-          // decodeURI decodes %25 to %, which creates unintended encoding
-          // sequences. Re-encode it, unless it's part of a sequence that
-          // survived decodeURI, i.e. one for:
-          // ';', '/', '?', ':', '@', '&', '=', '+', '$', ',', '#'
-          // (RFC 3987 section 3.2)
-          .replace(
-            /%(?!3B|2F|3F|3A|40|26|3D|2B|24|2C|23)/gi,
-            encodeURIComponent
-          );
-      } catch (e) {}
-    }
-  }
-
-  // Encode potentially invisible characters:
-  //   U+0000-001F: C0/C1 control characters
-  //   U+007F-009F: commands
-  //   U+00A0, U+1680, U+2000-200A, U+202F, U+205F, U+3000: other spaces
-  //   U+2028-2029: line and paragraph separators
-  //   U+2800: braille empty pattern
-  //   U+FFFC: object replacement character
-  // Encode any trailing whitespace that may be part of a pasted URL, so that it
-  // doesn't get eaten away by the location bar (bug 410726).
-  // Encode all adjacent space chars (U+0020), to prevent spoofing attempts
-  // where they would push part of the URL to overflow the location bar
-  // (bug 1395508). A single space, or the last space if the are many, is
-  // preserved to maintain readability of certain urls. We only do this for the
-  // common space, because others may be eaten when copied to the clipboard, so
-  // it's safer to preserve them encoded.
-  value = value.replace(
-    // eslint-disable-next-line no-control-regex
-    /[\u0000-\u001f\u007f-\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u2800\u3000\ufffc]|[\r\n\t]|\u0020(?=\u0020)|\s$/g,
-    encodeURIComponent
-  );
-
-  // Encode characters that are ignorable, can't be rendered usefully, or may
-  // confuse users.
-  //
-  // Default ignorable characters; ZWNJ (U+200C) and ZWJ (U+200D) are excluded
-  // per bug 582186:
-  //   U+00AD, U+034F, U+06DD, U+070F, U+115F-1160, U+17B4, U+17B5, U+180B-180E,
-  //   U+2060, U+FEFF, U+200B, U+2060-206F, U+3164, U+FE00-FE0F, U+FFA0,
-  //   U+FFF0-FFFB, U+1D173-1D17A (U+D834 + DD73-DD7A),
-  //   U+E0000-E0FFF (U+DB40-DB43 + U+DC00-DFFF)
-  // Bidi control characters (RFC 3987 sections 3.2 and 4.1 paragraph 6):
-  //   U+061C, U+200E, U+200F, U+202A-202E, U+2066-2069
-  // Other format characters in the Cf category that are unlikely to be rendered
-  // usefully:
-  //   U+0600-0605, U+08E2, U+110BD (U+D804 + U+DCBD),
-  //   U+110CD (U+D804 + U+DCCD), U+13430-13438 (U+D80D + U+DC30-DC38),
-  //   U+1BCA0-1BCA3 (U+D82F + U+DCA0-DCA3)
-  // Mimicking UI parts:
-  //   U+1F50F-1F513 (U+D83D + U+DD0F-DD13), U+1F6E1 (U+D83D + U+DEE1)
-  value = value.replace(
-    // eslint-disable-next-line no-misleading-character-class
-    /[\u00ad\u034f\u061c\u06dd\u070f\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\u3164\u0600-\u0605\u08e2\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]|\ud804[\udcbd\udccd]|\ud80d[\udc30-\udc38]|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]|\ud83d[\udd0f-\udd13\udee1]/g,
-    encodeURIComponent
-  );
-  return value;
 }
 
 /**

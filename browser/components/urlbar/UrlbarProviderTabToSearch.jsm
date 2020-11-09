@@ -15,6 +15,7 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 XPCOMUtils.defineLazyModuleGetters(this, {
+  Services: "resource://gre/modules/Services.jsm",
   UrlbarView: "resource:///modules/UrlbarView.jsm",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProvider: "resource:///modules/UrlbarUtils.jsm",
@@ -196,7 +197,7 @@ class ProviderTabToSearch extends UrlbarProvider {
    *   The element in the result's view that was picked.
    */
   pickResult(result, element) {
-    element.ownerGlobal.gURLBar.maybePromoteResultToSearchMode({
+    element.ownerGlobal.gURLBar.maybeConfirmSearchModeFromResult({
       result,
       checkValue: false,
     });
@@ -282,12 +283,17 @@ class ProviderTabToSearch extends UrlbarProvider {
       addCallback(this, result);
     }
 
-    // The muxer ensures we show at most one tab-to-seach result per query.
+    // The muxer ensures we show at most one tab-to-search result per query.
     // Thus, we increment these counters just once, even if we sent multiple
     // results to the muxer.
     if (showedOnboarding) {
       this.onboardingResultCountThisSession++;
       UrlbarPrefs.set("tipShownCount.tabToSearch", ++onboardingShownCount);
+      Services.telemetry.keyedScalarAdd(
+        "urlbar.tips",
+        "tabtosearch_onboard-shown",
+        1
+      );
     }
   }
 }

@@ -226,6 +226,8 @@ class Browsertime(Perftest):
             "--skipHar",
             "--pageLoadStrategy",
             "none",
+            "--webdriverPageload",
+            "true",
             "--firefox.disableBrowsertimeExtension",
             "true",
             "--pageCompleteCheckStartWait",
@@ -241,6 +243,9 @@ class Browsertime(Perftest):
             "--resultDir",
             self.results_handler.result_dir_for_test(test),
         ]
+
+        for var, val in self.config.get("environment", {}).items():
+            browsertime_options.extend(["--firefox.env", "{}={}".format(var, val)])
 
         if self.verbose:
             browsertime_options.append("-vvv")
@@ -264,6 +269,8 @@ class Browsertime(Perftest):
                     [
                         "--firefox.windowRecorder",
                         "false",
+                        "--xvfbParams.display",
+                        "0",
                     ]
                 )
                 LOG.info(

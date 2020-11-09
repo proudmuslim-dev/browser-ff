@@ -17,12 +17,10 @@ namespace dom {
 class AbortSignal;
 class AbortSignalImpl;
 
-// This class must be implemented by objects who want to follow a
+// This class must be implemented by objects who want to follow an
 // AbortSignalImpl.
-class AbortFollower {
+class AbortFollower : public nsISupports {
  public:
-  NS_INLINE_DECL_PURE_VIRTUAL_REFCOUNTING
-
   virtual void RunAbortAlgorithm() = 0;
 
   void Follow(AbortSignalImpl* aSignal);
@@ -31,11 +29,20 @@ class AbortFollower {
 
   bool IsFollowing() const;
 
+  AbortSignalImpl* Signal() const { return mFollowingSignal; }
+
  protected:
+  // Subclasses of this class must call these Traverse and Unlink functions
+  // during corresponding cycle collection operations.
+  static void Traverse(AbortFollower* aFollower,
+                       nsCycleCollectionTraversalCallback& cb);
+
+  static void Unlink(AbortFollower* aFollower) { aFollower->Unfollow(); }
+
   virtual ~AbortFollower();
 
-  // Subclasses of AbortFollower must Traverse this member and call
-  // Unfollow() when Unlinking.
+  friend class AbortSignalImpl;
+
   RefPtr<AbortSignalImpl> mFollowingSignal;
 };
 
@@ -47,15 +54,25 @@ class AbortSignalImpl : public nsISupports {
 
   virtual void SignalAbort();
 
-  void AddFollower(AbortFollower* aFollower);
-
-  void RemoveFollower(AbortFollower* aFollower);
-
  protected:
+  // Subclasses of this class must call these Traverse and Unlink functions
+  // during corresponding cycle collection operations.
+  static void Traverse(AbortSignalImpl* aSignal,
+                       nsCycleCollectionTraversalCallback& cb);
+
+  static void Unlink(AbortSignalImpl* aSignal) {
+    // To be filled in shortly.
+  }
+
   virtual ~AbortSignalImpl() = default;
 
  private:
-  // Raw pointers. AbortFollower unregisters itself in the DTOR.
+  friend class AbortFollower;
+
+  // Raw pointers.  |AbortFollower::Follow| adds to this array, and
+  // |AbortFollower::Unfollow| (also callbed by the destructor) will remove
+  // from this array.  Finally, calling |SignalAbort()| will (after running all
+  // abort algorithms) empty this and make all contained followers |Unfollow()|.
   nsTObserverArray<AbortFollower*> mFollowers;
 
   bool mAborted;

@@ -13,7 +13,10 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   error: "chrome://marionette/content/error.js",
+  EventDispatcher:
+    "chrome://marionette/content/actors/MarionetteEventsParent.jsm",
   Log: "chrome://marionette/content/log.js",
+  MarionettePrefs: "chrome://marionette/content/prefs.js",
   modal: "chrome://marionette/content/modal.js",
   PageLoadStrategy: "chrome://marionette/content/capabilities.js",
   TimedPromise: "chrome://marionette/content/sync.js",
@@ -195,144 +198,175 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
     return Promise.resolve();
   }
 
+  let rejectNavigation;
+  let resolveNavigation;
+
+  let seenBeforeUnload = false;
+  let seenUnload = false;
+
+  let unloadTimer;
+
+  const checkDone = ({ finished, error }) => {
+    if (finished) {
+      if (error) {
+        rejectNavigation(error);
+      } else {
+        resolveNavigation();
+      }
+    }
+  };
+
+  const onDialogOpened = (action, dialog, win) => {
+    // Only care about modals of the currently selected window.
+    if (win !== chromeWindow) {
+      return;
+    }
+
+    if (action === modal.ACTION_OPENED) {
+      logger.trace("Canceled page load listener because a dialog opened");
+      checkDone({ finished: true });
+    }
+  };
+
+  const onTimer = timer => {
+    // In the case when a document has a beforeunload handler
+    // registered, the currently active command will return immediately
+    // due to the modal dialog observer in proxy.js.
+    //
+    // Otherwise the timeout waiting for the document to start
+    // navigating is increased by 5000 ms to ensure a possible load
+    // event is not missed. In the common case such an event should
+    // occur pretty soon after beforeunload, and we optimise for this.
+    if (seenBeforeUnload) {
+      seenBeforeUnload = false;
+      unloadTimer.initWithCallback(
+        onTimer,
+        TIMEOUT_UNLOAD_EVENT,
+        Ci.nsITimer.TYPE_ONE_SHOT
+      );
+
+      // If no page unload has been detected, ensure to properly stop
+      // the load listener, and return from the currently active command.
+    } else if (!seenUnload) {
+      logger.trace(
+        "Canceled page load listener because no navigation " +
+          "has been detected"
+      );
+      checkDone({ finished: true });
+    }
+  };
+
+  const onNavigation = ({ json }, message) => {
+    let data = MarionettePrefs.useActors ? message : json;
+
+    if (MarionettePrefs.useActors) {
+      // Only care about navigation events from the actor of the current frame.
+      // Bug 1674329: Always use the currently active browsing context,
+      // and not the original one to not cause hangs for remoteness changes.
+      if (data.browsingContext != driver.getBrowsingContext()) {
+        return;
+      }
+    } else if (data.browsingContext.browserId != browsingContext.browserId) {
+      return;
+    }
+
+    logger.trace(truncate`Received event ${data.type} for ${data.documentURI}`);
+
+    switch (data.type) {
+      case "beforeunload":
+        seenBeforeUnload = true;
+        seenUnload = false;
+        break;
+
+      case "pagehide":
+        seenUnload = true;
+        break;
+
+      case "hashchange":
+      case "popstate":
+        checkDone({ finished: true });
+        break;
+
+      case "DOMContentLoaded":
+      case "pageshow":
+        if (!seenUnload) {
+          return;
+        }
+        const result = checkReadyState(pageLoadStrategy, data);
+        checkDone(result);
+        break;
+    }
+  };
+
+  // In the case when the currently selected frame is closed,
+  // there will be no further load events. Stop listening immediately.
+  const onBrowsingContextDiscarded = (subject, topic) => {
+    // With the currentWindowGlobal gone the browsing context hasn't been
+    // replaced due to a remoteness change but closed.
+    if (subject == browsingContext && !subject.currentWindowGlobal) {
+      logger.trace(
+        "Canceled page load listener " +
+          `because frame with id ${subject.id} has been removed`
+      );
+      checkDone({ finished: true });
+    }
+  };
+
+  const onUnload = event => {
+    logger.trace(
+      "Canceled page load listener " +
+        "because the top-browsing context has been closed"
+    );
+    checkDone({ finished: true });
+  };
+
+  chromeWindow.addEventListener("TabClose", onUnload);
+  chromeWindow.addEventListener("unload", onUnload);
+  driver.dialogObserver.add(onDialogOpened);
+  Services.obs.addObserver(
+    onBrowsingContextDiscarded,
+    "browsing-context-discarded"
+  );
+
+  if (MarionettePrefs.useActors) {
+    // Register the JSWindowActor pair for events as used by Marionette
+    ChromeUtils.registerWindowActor("MarionetteEvents", {
+      kind: "JSWindowActor",
+      parent: {
+        moduleURI:
+          "chrome://marionette/content/actors/MarionetteEventsParent.jsm",
+      },
+      child: {
+        moduleURI:
+          "chrome://marionette/content/actors/MarionetteEventsChild.jsm",
+        events: {
+          beforeunload: { capture: true },
+          DOMContentLoaded: { mozSystemGroup: true },
+          hashchange: { mozSystemGroup: true },
+          pagehide: { mozSystemGroup: true },
+          pageshow: { mozSystemGroup: true },
+          // popstate doesn't bubble, as such use capturing phase
+          popstate: { capture: true, mozSystemGroup: true },
+        },
+      },
+
+      allFrames: true,
+      includeChrome: true,
+    });
+
+    EventDispatcher.on("page-load", onNavigation);
+  } else {
+    driver.mm.addMessageListener(
+      "Marionette:NavigationEvent",
+      onNavigation,
+      true
+    );
+  }
+
   return new TimedPromise(
     async (resolve, reject) => {
-      const navigationMessage = "Marionette:NavigationEvent";
-
-      let seenBeforeUnload = false;
-      let seenUnload = false;
-
-      let unloadTimer;
-
-      const checkDone = ({ finished, error }) => {
-        if (finished) {
-          Services.obs.removeObserver(
-            onBrowsingContextDiscarded,
-            "browsing-context-discarded"
-          );
-          chromeWindow.removeEventListener("TabClose", onUnload);
-          chromeWindow.removeEventListener("unload", onUnload);
-          driver.dialogObserver.remove(onDialogOpened);
-          driver.mm.removeMessageListener(
-            navigationMessage,
-            onNavigation,
-            true
-          );
-          unloadTimer?.cancel();
-
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        }
-      };
-
-      const onDialogOpened = (action, dialog, win) => {
-        // Only care about modals of the currently selected window.
-        if (win !== chromeWindow) {
-          return;
-        }
-
-        if (action === modal.ACTION_OPENED) {
-          logger.trace("Canceled page load listener because a dialog opened");
-          checkDone({ finished: true });
-        }
-      };
-
-      const onTimer = timer => {
-        // In the case when a document has a beforeunload handler
-        // registered, the currently active command will return immediately
-        // due to the modal dialog observer in proxy.js.
-        //
-        // Otherwise the timeout waiting for the document to start
-        // navigating is increased by 5000 ms to ensure a possible load
-        // event is not missed. In the common case such an event should
-        // occur pretty soon after beforeunload, and we optimise for this.
-        if (seenBeforeUnload) {
-          seenBeforeUnload = false;
-          unloadTimer.initWithCallback(
-            onTimer,
-            TIMEOUT_UNLOAD_EVENT,
-            Ci.nsITimer.TYPE_ONE_SHOT
-          );
-
-          // If no page unload has been detected, ensure to properly stop
-          // the load listener, and return from the currently active command.
-        } else if (!seenUnload) {
-          logger.trace(
-            "Canceled page load listener because no navigation " +
-              "has been detected"
-          );
-          checkDone({ finished: true });
-        }
-      };
-
-      const onNavigation = ({ json }) => {
-        if (json.browsingContext.browserId != browsingContext.browserId) {
-          return;
-        }
-
-        logger.trace(
-          truncate`Received message ${json.type} for ${json.documentURI}`
-        );
-
-        switch (json.type) {
-          case "beforeunload":
-            seenBeforeUnload = true;
-            seenUnload = false;
-            break;
-
-          case "pagehide":
-            seenUnload = true;
-            break;
-
-          case "hashchange":
-          case "popstate":
-            checkDone({ finished: true });
-            break;
-
-          case "DOMContentLoaded":
-          case "pageshow":
-            if (!seenUnload) {
-              return;
-            }
-            const result = checkReadyState(pageLoadStrategy, json);
-            checkDone(result);
-            break;
-        }
-      };
-
-      // In the case when the currently selected frame is closed,
-      // there will be no further load events. Stop listening immediately.
-      const onBrowsingContextDiscarded = (subject, topic) => {
-        // With the currentWindowGlobal gone the browsing context hasn't been
-        // replaced due to a remoteness change but closed.
-        if (subject == browsingContext && !subject.currentWindowGlobal) {
-          logger.trace(
-            "Canceled page load listener " +
-              `because frame with id ${subject.id} has been removed`
-          );
-          checkDone({ finished: true });
-        }
-      };
-
-      const onUnload = event => {
-        logger.trace(
-          "Canceled page load listener " +
-            "because the top-browsing context has been closed"
-        );
-        checkDone({ finished: true });
-      };
-
-      chromeWindow.addEventListener("TabClose", onUnload);
-      chromeWindow.addEventListener("unload", onUnload);
-      driver.dialogObserver.add(onDialogOpened);
-      Services.obs.addObserver(
-        onBrowsingContextDiscarded,
-        "browsing-context-discarded"
-      );
-      driver.mm.addMessageListener(navigationMessage, onNavigation, true);
+      rejectNavigation = reject;
+      resolveNavigation = resolve;
 
       try {
         await callback();
@@ -359,5 +393,26 @@ navigate.waitForNavigationCompleted = async function waitForNavigationCompleted(
     {
       timeout: driver.timeouts.pageLoad,
     }
-  );
+  ).finally(() => {
+    // Clean-up all registered listeners and timers
+    Services.obs.removeObserver(
+      onBrowsingContextDiscarded,
+      "browsing-context-discarded"
+    );
+    chromeWindow.removeEventListener("TabClose", onUnload);
+    chromeWindow.removeEventListener("unload", onUnload);
+    driver.dialogObserver.remove(onDialogOpened);
+    unloadTimer?.cancel();
+
+    if (MarionettePrefs.useActors) {
+      EventDispatcher.off("page-load", onNavigation);
+      ChromeUtils.unregisterWindowActor("MarionetteEvents");
+    } else {
+      driver.mm.removeMessageListener(
+        "Marionette:NavigationEvent",
+        onNavigation,
+        true
+      );
+    }
+  });
 };

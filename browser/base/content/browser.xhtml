@@ -1537,7 +1537,7 @@
       </vbox>
       <checkbox id="panelMenu-toggleWhatsNew"
                 class="panelMenu-toggleWhatsNew-checkbox"
-                oncommand="ToolbarPanelHub.toggleWhatsNewPref(event)"
+                onclick="ToolbarPanelHub.toggleWhatsNewPref(event)"
                 data-l10n-id="whatsnew-panel-footer-checkbox"/>
     </panelview>
   </html:template>
@@ -2085,6 +2085,19 @@
                          placespopup="true"
                          tooltip="bhTooltip" popupsinherittooltip="true"
                          context="placesContext"/>
+            </toolbarbutton>
+            <toolbarbutton type="menu"
+                           id="OtherBookmarks"
+                           class="bookmark-item"
+                           hidden="true"
+                           label="&bookmarksMenuButton.other.label;"
+                           container="true"
+                           onpopupshowing="document.getElementById('PlacesToolbar')
+                                                   ._placesView._onOtherBookmarksPopupShowing(event);">
+              <menupopup id="OtherBookmarksPopup"
+                         is="places-popup"
+                         placespopup="true"
+                         context="placesContext" />
             </toolbarbutton>
           </hbox>
         </hbox>

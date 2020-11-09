@@ -33,6 +33,13 @@ loader.lazyRequireGetter(
   "devtools/server/actors/watcher/target-helpers/worker-helper"
 );
 
+loader.lazyRequireGetter(
+  this,
+  "NetworkActor",
+  "devtools/server/actors/network-monitor/network",
+  true
+);
+
 exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
   /**
    * Optionally pass a `browser` in the second argument
@@ -129,6 +136,7 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
           [Resources.TYPES.DOCUMENT_EVENT]: hasBrowserElement,
           [Resources.TYPES.ERROR_MESSAGE]: hasBrowserElement,
           [Resources.TYPES.LOCAL_STORAGE]: hasBrowserElement,
+          [Resources.TYPES.SESSION_STORAGE]: hasBrowserElement,
           [Resources.TYPES.PLATFORM_MESSAGE]: true,
           [Resources.TYPES.NETWORK_EVENT]:
             enableServerWatcher && hasBrowserElement,
@@ -409,5 +417,15 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
 
     // Unregister the JS Window Actor if there is no more DevTools code observing any target/resource
     WatcherRegistry.maybeUnregisteringJSWindowActor();
+  },
+
+  /**
+   * Returns the network actor.
+   *
+   * @return {Object} actor
+   *        The network actor.
+   */
+  getNetworkActor() {
+    return new NetworkActor(this);
   },
 });

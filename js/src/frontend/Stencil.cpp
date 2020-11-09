@@ -151,19 +151,17 @@ static bool CreateLazyScript(JSContext* cx, CompilationInfo& compilationInfo,
                              CompilationGCOutput& gcOutput,
                              const ScriptStencil& script,
                              HandleFunction function) {
-  const ScriptThingsVector& gcthings = script.gcThings;
-
   Rooted<ScriptSourceObject*> sourceObject(cx, gcOutput.sourceObject);
+  size_t ngcthings = script.gcThings.size();
 
   Rooted<BaseScript*> lazy(
-      cx,
-      BaseScript::CreateRawLazy(cx, gcthings.length(), function, sourceObject,
-                                script.extent, script.immutableFlags));
+      cx, BaseScript::CreateRawLazy(cx, ngcthings, function, sourceObject,
+                                    script.extent, script.immutableFlags));
   if (!lazy) {
     return false;
   }
 
-  if (!EmitScriptThingsVector(cx, compilationInfo, gcOutput, gcthings,
+  if (!EmitScriptThingsVector(cx, compilationInfo, gcOutput, script.gcThings,
                               lazy->gcthingsForInit())) {
     return false;
   }
@@ -231,8 +229,8 @@ static JSFunction* CreateFunction(JSContext* cx,
 }
 
 static bool InstantiateAtoms(JSContext* cx, CompilationInfo& compilationInfo) {
-  return compilationInfo.stencil.parserAtoms.instantiateMarkedAtoms(
-      cx, compilationInfo.input.atomCache);
+  return InstantiateMarkedAtoms(cx, compilationInfo.stencil.parserAtomData,
+                                compilationInfo.input.atomCache);
 }
 
 static bool InstantiateScriptSourceObject(JSContext* cx,
@@ -802,7 +800,7 @@ bool CompilationInfoVector::instantiateStencilsAfterPreparation(
 
 bool CompilationInfo::prepareInputAndStencilForInstantiate(JSContext* cx) {
   if (!input.atomCache.atoms.reserve(
-          stencil.parserAtoms.requiredNonStaticAtomCount())) {
+          RequiredNonStaticAtomCount(stencil.parserAtomData))) {
     ReportOutOfMemory(cx);
     return false;
   }
@@ -890,9 +888,8 @@ bool CompilationInfoVector::deserializeStencils(JSContext* cx,
   if (succeededOut) {
     *succeededOut = false;
   }
-  MOZ_ASSERT(initial.stencil.parserAtoms.empty());
-  XDRStencilDecoder decoder(cx, &initial.input.options, range,
-                            initial.stencil.parserAtoms);
+  MOZ_ASSERT(initial.stencil.parserAtomData.empty());
+  XDRStencilDecoder decoder(cx, &initial.input.options, range);
 
   XDRResult res = decoder.codeStencils(*this);
   if (res.isErr()) {
@@ -910,6 +907,18 @@ bool CompilationInfoVector::deserializeStencils(JSContext* cx,
   return true;
 }
 
+CompilationState::CompilationState(JSContext* cx,
+                                   LifoAllocScope& frontendAllocScope,
+                                   const JS::ReadOnlyCompileOptions& options,
+                                   CompilationStencil& stencil,
+                                   Scope* enclosingScope /* = nullptr */,
+                                   JSObject* enclosingEnv /* = nullptr */)
+    : directives(options.forceStrictMode()),
+      scopeContext(cx, enclosingScope, enclosingEnv),
+      usedNames(cx),
+      allocScope(frontendAllocScope),
+      parserAtoms(cx->runtime(), stencil.alloc, stencil.parserAtomData) {}
+
 #if defined(DEBUG) || defined(JS_JITSPEW)
 
 void RegExpStencil::dump() {
@@ -922,20 +931,7 @@ void RegExpStencil::dump(js::JSONPrinter& json) {
   GenericPrinter& out = json.beginString();
 
   out.put("/");
-  for (size_t i = 0; i < length_; i++) {
-    char16_t c = buf_[i];
-    if (c == '\n') {
-      out.put("\\n");
-    } else if (c == '\t') {
-      out.put("\\t");
-    } else if (c >= 32 && c < 127) {
-      out.putChar(char(buf_[i]));
-    } else if (c <= 255) {
-      out.printf("\\x%02x", unsigned(c));
-    } else {
-      out.printf("\\u%04x", unsigned(c));
-    }
-  }
+  atom_->dumpCharsNoQuote(out);
   out.put("/");
 
   if (flags_.global()) {
@@ -1025,7 +1021,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
 
   switch (kind_) {
     case ScopeKind::Function: {
-      auto* data = static_cast<ParserFunctionScopeData*>(data_.get());
+      auto* data = static_cast<ParserFunctionScopeData*>(data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
       json.property("hasParameterExprs", data->hasParameterExprs);
       json.property("nonPositionalFormalStart", data->nonPositionalFormalStart);
@@ -1037,7 +1033,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
     }
 
     case ScopeKind::FunctionBodyVar: {
-      auto* data = static_cast<ParserVarScopeData*>(data_.get());
+      auto* data = static_cast<ParserVarScopeData*>(data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
 
       trailingNames = &data->trailingNames;
@@ -1052,7 +1048,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
     case ScopeKind::StrictNamedLambda:
     case ScopeKind::FunctionLexical:
     case ScopeKind::ClassBody: {
-      auto* data = static_cast<ParserLexicalScopeData*>(data_.get());
+      auto* data = static_cast<ParserLexicalScopeData*>(data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
       json.property("constStart", data->constStart);
 
@@ -1067,7 +1063,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
 
     case ScopeKind::Eval:
     case ScopeKind::StrictEval: {
-      auto* data = static_cast<ParserEvalScopeData*>(data_.get());
+      auto* data = static_cast<ParserEvalScopeData*>(data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
 
       trailingNames = &data->trailingNames;
@@ -1077,7 +1073,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
 
     case ScopeKind::Global:
     case ScopeKind::NonSyntactic: {
-      auto* data = static_cast<ParserGlobalScopeData*>(data_.get());
+      auto* data = static_cast<ParserGlobalScopeData*>(data_);
       json.property("letStart", data->letStart);
       json.property("constStart", data->constStart);
 
@@ -1087,7 +1083,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
     }
 
     case ScopeKind::Module: {
-      auto* data = static_cast<ParserModuleScopeData*>(data_.get());
+      auto* data = static_cast<ParserModuleScopeData*>(data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
       json.property("varStart", data->varStart);
       json.property("letStart", data->letStart);
@@ -1101,7 +1097,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
     case ScopeKind::WasmInstance: {
       auto* data =
           static_cast<AbstractScopeData<WasmInstanceScope, const ParserAtom>*>(
-              data_.get());
+              data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
       json.property("globalsStart", data->globalsStart);
 
@@ -1113,7 +1109,7 @@ void ScopeStencil::dumpFields(js::JSONPrinter& json) {
     case ScopeKind::WasmFunction: {
       auto* data =
           static_cast<AbstractScopeData<WasmFunctionScope, const ParserAtom>*>(
-              data_.get());
+              data_);
       json.property("nextFrameSlot", data->nextFrameSlot);
 
       trailingNames = &data->trailingNames;
@@ -1573,3 +1569,17 @@ void CompilationStencil::dump(js::JSONPrinter& json) {
 }
 
 #endif  // defined(DEBUG) || defined(JS_JITSPEW)
+
+mozilla::Span<ScriptThingVariant> js::frontend::NewScriptThingSpanUninitialized(
+    JSContext* cx, LifoAlloc& alloc, uint32_t ngcthings) {
+  MOZ_ASSERT(ngcthings > 0);
+
+  ScriptThingVariant* stencilThings =
+      alloc.newArrayUninitialized<ScriptThingVariant>(ngcthings);
+  if (!stencilThings) {
+    js::ReportOutOfMemory(cx);
+    return mozilla::Span<ScriptThingVariant>();
+  }
+
+  return mozilla::Span<ScriptThingVariant>(stencilThings, ngcthings);
+}

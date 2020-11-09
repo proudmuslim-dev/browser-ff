@@ -67,7 +67,7 @@ class FunctionCompiler;
 
 class CallCompileState {
   // A generator object that is passed each argument as it is compiled.
-  ABIArgGenerator abi_;
+  WasmABIArgGenerator abi_;
 
   // Accumulates the register arguments while compiling arguments.
   MWasmCall::Args regArgs_;
@@ -167,7 +167,7 @@ class FunctionCompiler {
       return false;
     }
 
-    for (ABIArgIter i(args); !i.done(); i++) {
+    for (WasmABIArgIter i(args); !i.done(); i++) {
       MWasmParameter* ins = MWasmParameter::New(alloc(), *i, i.mirType());
       curBlock_->add(ins);
       if (args.isSyntheticStackResultPointerArg(i.index())) {
@@ -909,7 +909,7 @@ class FunctionCompiler {
     return load;
   }
 
-  MWasmLoadTls* maybeLoadBoundsCheckLimit() {
+  MWasmLoadTls* maybeLoadBoundsCheckLimit32() {
     if (moduleEnv_.hugeMemoryEnabled()) {
       return nullptr;
     }
@@ -917,7 +917,7 @@ class FunctionCompiler {
                            ? AliasSet::None()
                            : AliasSet::Load(AliasSet::WasmHeapMeta);
     auto load = MWasmLoadTls::New(alloc(), tlsPointer_,
-                                  offsetof(wasm::TlsData, boundsCheckLimit),
+                                  offsetof(wasm::TlsData, boundsCheckLimit32),
                                   MIRType::Int32, aliases);
     curBlock_->add(load);
     return load;
@@ -997,9 +997,9 @@ class FunctionCompiler {
           alloc(), *base, access->byteSize(), bytecodeOffset()));
     }
 
-    MWasmLoadTls* boundsCheckLimit = maybeLoadBoundsCheckLimit();
-    if (boundsCheckLimit) {
-      auto* ins = MWasmBoundsCheck::New(alloc(), *base, boundsCheckLimit,
+    MWasmLoadTls* boundsCheckLimit32 = maybeLoadBoundsCheckLimit32();
+    if (boundsCheckLimit32) {
+      auto* ins = MWasmBoundsCheck::New(alloc(), *base, boundsCheckLimit32,
                                         bytecodeOffset());
       curBlock_->add(ins);
       if (JitOptions.spectreIndexMasking) {
@@ -1043,8 +1043,8 @@ class FunctionCompiler {
     MInstruction* load = nullptr;
     if (moduleEnv_.isAsmJS()) {
       MOZ_ASSERT(access->offset() == 0);
-      MWasmLoadTls* boundsCheckLimit = maybeLoadBoundsCheckLimit();
-      load = MAsmJSLoadHeap::New(alloc(), memoryBase, base, boundsCheckLimit,
+      MWasmLoadTls* boundsCheckLimit32 = maybeLoadBoundsCheckLimit32();
+      load = MAsmJSLoadHeap::New(alloc(), memoryBase, base, boundsCheckLimit32,
                                  access->type());
     } else {
       checkOffsetAndAlignmentAndBounds(access, &base);
@@ -1067,9 +1067,9 @@ class FunctionCompiler {
     MInstruction* store = nullptr;
     if (moduleEnv_.isAsmJS()) {
       MOZ_ASSERT(access->offset() == 0);
-      MWasmLoadTls* boundsCheckLimit = maybeLoadBoundsCheckLimit();
-      store = MAsmJSStoreHeap::New(alloc(), memoryBase, base, boundsCheckLimit,
-                                   access->type(), v);
+      MWasmLoadTls* boundsCheckLimit32 = maybeLoadBoundsCheckLimit32();
+      store = MAsmJSStoreHeap::New(alloc(), memoryBase, base,
+                                   boundsCheckLimit32, access->type(), v);
     } else {
       checkOffsetAndAlignmentAndBounds(access, &base);
       store = MWasmStore::New(alloc(), memoryBase, base, *access, v);

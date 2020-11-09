@@ -4,8 +4,6 @@
 
 "use strict";
 
-// eslint-disable-next-line mozilla/reject-some-requires
-const { gDevTools } = require("devtools/client/framework/devtools");
 const { throttle } = require("devtools/shared/throttle");
 
 class ResourceWatcher {
@@ -55,6 +53,19 @@ class ResourceWatcher {
    */
   getAllResources(resourceType) {
     return this._cache.filter(r => r.resourceType === resourceType);
+  }
+
+  /**
+   * Return the specified resource cached in this watcher.
+   *
+   * @param {String} resourceType
+   * @param {String} resourceId
+   * @return {Object} resource cached in this watcher
+   */
+  getResourceById(resourceType, resourceId) {
+    return this._cache.find(
+      r => r.resourceType === resourceType && r.resourceId === resourceId
+    );
   }
 
   /**
@@ -359,7 +370,6 @@ class ResourceWatcher {
           resource,
           targetList: this.targetList,
           targetFront,
-          isFissionEnabledOnContentToolbox: gDevTools.isFissionContentToolboxEnabled(),
           watcher: this.watcher,
         });
       }
@@ -678,7 +688,6 @@ class ResourceWatcher {
     return LegacyListeners[resourceType]({
       targetList: this.targetList,
       targetFront,
-      isFissionEnabledOnContentToolbox: gDevTools.isFissionContentToolboxEnabled(),
       onAvailable,
       onDestroyed,
       onUpdated,
@@ -833,9 +842,9 @@ const ResourceTransformers = {
   [ResourceWatcher.TYPES
     .ERROR_MESSAGE]: require("devtools/shared/resources/transformers/error-messages"),
   [ResourceWatcher.TYPES
-    .INDEXED_DB]: require("devtools/shared/resources/transformers/storage-indexed-db.js"),
-  [ResourceWatcher.TYPES
     .LOCAL_STORAGE]: require("devtools/shared/resources/transformers/storage-local-storage.js"),
   [ResourceWatcher.TYPES
     .ROOT_NODE]: require("devtools/shared/resources/transformers/root-node"),
+  [ResourceWatcher.TYPES
+    .SESSION_STORAGE]: require("devtools/shared/resources/transformers/storage-session-storage.js"),
 };

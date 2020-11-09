@@ -101,6 +101,20 @@ struct ParamTraits<mozilla::layers::LayersBackend>
           mozilla::layers::LayersBackend::LAYERS_LAST> {};
 
 template <>
+struct ParamTraits<mozilla::layers::WebRenderBackend>
+    : public ContiguousEnumSerializer<
+          mozilla::layers::WebRenderBackend,
+          mozilla::layers::WebRenderBackend::HARDWARE,
+          mozilla::layers::WebRenderBackend::LAST> {};
+
+template <>
+struct ParamTraits<mozilla::layers::WebRenderCompositor>
+    : public ContiguousEnumSerializer<
+          mozilla::layers::WebRenderCompositor,
+          mozilla::layers::WebRenderCompositor::DRAW,
+          mozilla::layers::WebRenderCompositor::LAST> {};
+
+template <>
 struct ParamTraits<mozilla::layers::TextureType>
     : public ContiguousEnumSerializer<mozilla::layers::TextureType,
                                       mozilla::layers::TextureType::Unknown,
@@ -210,6 +224,7 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
     WriteParam(aMsg, aParam.mVisualDestination);
     WriteParam(aMsg, aParam.mVisualScrollUpdateType);
     WriteParam(aMsg, aParam.mFixedLayerMargins);
+    WriteParam(aMsg, aParam.mCompositionSizeWithoutDynamicToolbar);
     WriteParam(aMsg, aParam.mIsRootContent);
     WriteParam(aMsg, aParam.mIsScrollInfoLayer);
   }
@@ -236,6 +251,8 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
             ReadParam(aMsg, aIter, &aResult->mVisualDestination) &&
             ReadParam(aMsg, aIter, &aResult->mVisualScrollUpdateType) &&
             ReadParam(aMsg, aIter, &aResult->mFixedLayerMargins) &&
+            ReadParam(aMsg, aIter,
+                      &aResult->mCompositionSizeWithoutDynamicToolbar) &&
             ReadBoolForBitfield(aMsg, aIter, aResult,
                                 &paramType::SetIsRootContent) &&
             ReadBoolForBitfield(aMsg, aIter, aResult,
@@ -462,6 +479,8 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier> {
 
   static void Write(Message* aMsg, const paramType& aParam) {
     WriteParam(aMsg, aParam.mParentBackend);
+    WriteParam(aMsg, aParam.mWebRenderBackend);
+    WriteParam(aMsg, aParam.mWebRenderCompositor);
     WriteParam(aMsg, aParam.mParentProcessType);
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureDirectMapping);
@@ -472,7 +491,6 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier> {
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
     WriteParam(aMsg, aParam.mSupportsComponentAlpha);
     WriteParam(aMsg, aParam.mUsingAdvancedLayers);
-    WriteParam(aMsg, aParam.mUsingSoftwareWebRender);
     WriteParam(aMsg, aParam.mSyncHandle);
   }
 
@@ -480,6 +498,8 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier> {
                    paramType* aResult) {
     bool result =
         ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
+        ReadParam(aMsg, aIter, &aResult->mWebRenderBackend) &&
+        ReadParam(aMsg, aIter, &aResult->mWebRenderCompositor) &&
         ReadParam(aMsg, aIter, &aResult->mParentProcessType) &&
         ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
         ReadParam(aMsg, aIter, &aResult->mSupportsTextureDirectMapping) &&
@@ -490,7 +510,6 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier> {
         ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
         ReadParam(aMsg, aIter, &aResult->mSupportsComponentAlpha) &&
         ReadParam(aMsg, aIter, &aResult->mUsingAdvancedLayers) &&
-        ReadParam(aMsg, aIter, &aResult->mUsingSoftwareWebRender) &&
         ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     return result;
   }

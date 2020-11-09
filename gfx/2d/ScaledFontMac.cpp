@@ -383,12 +383,14 @@ bool UnscaledFontMac::GetFontDescriptor(FontDescriptorOutput aCb,
   const char* cstr = CFStringGetCStringPtr(psname, kCFStringEncodingUTF8);
   if (!cstr) {
     if (!CFStringGetCString(psname, buf, sizeof(buf), kCFStringEncodingUTF8)) {
+      CFRelease(psname);
       return false;
     }
     cstr = buf;
   }
 
   aCb(reinterpret_cast<const uint8_t*>(cstr), strlen(cstr), 0, aBaton);
+  CFRelease(psname);
   return true;
 }
 
@@ -413,11 +415,6 @@ static void CollectVariationsFromDictionary(const void* aKey,
 
 static bool GetVariationsForCTFont(CTFontRef aCTFont,
                                    std::vector<FontVariation>* aOutVariations) {
-  // Avoid calling potentially buggy variation APIs on pre-Sierra macOS
-  // versions (see bug 1331683)
-  if (!nsCocoaFeatures::OnSierraOrLater()) {
-    return true;
-  }
   if (!aCTFont) {
     return true;
   }
@@ -489,12 +486,6 @@ ScaledFontMac::InstanceData::InstanceData(
 static CFDictionaryRef CreateVariationDictionaryOrNull(
     CGFontRef aCGFont, CFArrayRef& aAxesCache, uint32_t aVariationCount,
     const FontVariation* aVariations) {
-  // Avoid calling potentially buggy variation APIs on pre-Sierra macOS
-  // versions (see bug 1331683)
-  if (!nsCocoaFeatures::OnSierraOrLater()) {
-    return nullptr;
-  }
-
   if (!aAxesCache) {
     AutoRelease<CTFontRef> ctFont(
         CTFontCreateWithGraphicsFont(aCGFont, 0, nullptr, nullptr));
@@ -591,12 +582,6 @@ static CFDictionaryRef CreateVariationDictionaryOrNull(
 static CFDictionaryRef CreateVariationTagDictionaryOrNull(
     CTFontRef aCTFont, uint32_t aVariationCount,
     const FontVariation* aVariations) {
-  // Avoid calling potentially buggy variation APIs on pre-Sierra macOS
-  // versions (see bug 1331683)
-  if (!nsCocoaFeatures::OnSierraOrLater()) {
-    return nullptr;
-  }
-
   AutoRelease<CFArrayRef> axes(CTFontCopyVariationAxes(aCTFont));
   CFIndex axisCount = CFArrayGetCount(axes);
 

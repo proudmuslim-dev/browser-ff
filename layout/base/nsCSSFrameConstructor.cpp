@@ -230,8 +230,6 @@ nsIFrame* NS_NewImageBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
 nsIFrame* NS_NewTextBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
-nsIFrame* NS_NewGroupBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
-
 nsIFrame* NS_NewButtonBoxFrame(PresShell* aPresShell, ComputedStyle* aStyle);
 
 nsIFrame* NS_NewSplitterFrame(PresShell* aPresShell, ComputedStyle* aStyle);
@@ -4019,7 +4017,6 @@ nsCSSFrameConstructor::FindXULTagData(const Element& aElement,
       SIMPLE_TAG_CHAIN(description,
                        nsCSSFrameConstructor::FindXULDescriptionData),
       SIMPLE_XUL_CREATE(menu, NS_NewMenuFrame),
-      SIMPLE_XUL_CREATE(menubutton, NS_NewMenuFrame),
       SIMPLE_XUL_CREATE(menulist, NS_NewMenuFrame),
       SIMPLE_XUL_CREATE(menuitem, NS_NewMenuItemFrame),
 #  ifdef XP_MACOSX
@@ -4716,16 +4713,6 @@ nsCSSFrameConstructor::FindMathMLData(const Element& aElement,
                         FCDATA_IS_LINE_PARTICIPANT | FCDATA_WRAP_KIDS_IN_BLOCKS,
                     NS_NewMathMLmathInlineFrame);
     return &sInlineMathData;
-  }
-
-  if (!StaticPrefs::mathml_mfenced_element_disabled() &&
-      tag == nsGkAtoms::mfenced_) {
-    // These flags are the same as those of SIMPLE_MATHML_CREATE.
-    static const FrameConstructionData sMathFencedData = FCDATA_DECL(
-        FCDATA_DISALLOW_OUT_OF_FLOW | FCDATA_FORCE_NULL_ABSPOS_CONTAINER |
-            FCDATA_WRAP_KIDS_IN_BLOCKS,
-        NS_NewMathMLmfencedFrame);
-    return &sMathFencedData;
   }
 
   static const FrameConstructionDataByTag sMathMLData[] = {

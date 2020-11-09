@@ -1747,8 +1747,8 @@ bool CacheIRCompiler::emitGuardToTypedArrayIndex(ValOperandId inputId,
         // No-op if the value is already an int32.
       },
       [&](FloatRegister floatReg) {
-        static_assert(
-            TypedArrayObject::MAX_BYTE_LENGTH <= INT32_MAX,
+        MOZ_ASSERT(
+            TypedArrayObject::maxByteLength() <= INT32_MAX,
             "Double exceeding Int32 range can't be in-bounds array access");
 
         // ToPropertyKey(-0.0) is "0", so we can truncate -0.0 to 0 here.
@@ -2667,11 +2667,15 @@ bool CacheIRCompiler::emitInt32DivResult(Int32OperandId lhsId,
   // Prevent division by 0.
   masm.branchTest32(Assembler::Zero, rhs, rhs, failure->label());
 
-  // Prevent negative 0 and -2147483648 / -1.
-  masm.branch32(Assembler::Equal, lhs, Imm32(INT32_MIN), failure->label());
+  // Prevent -2147483648 / -1.
+  Label notOverflow;
+  masm.branch32(Assembler::NotEqual, lhs, Imm32(INT32_MIN), &notOverflow);
+  masm.branch32(Assembler::Equal, rhs, Imm32(-1), failure->label());
+  masm.bind(&notOverflow);
 
+  // Prevent negative 0.
   Label notZero;
-  masm.branch32(Assembler::NotEqual, lhs, Imm32(0), &notZero);
+  masm.branchTest32(Assembler::NonZero, lhs, lhs, &notZero);
   masm.branchTest32(Assembler::Signed, rhs, rhs, failure->label());
   masm.bind(&notZero);
 
@@ -2699,22 +2703,28 @@ bool CacheIRCompiler::emitInt32ModResult(Int32OperandId lhsId,
     return false;
   }
 
-  // Modulo takes the sign of the dividend; don't handle negative dividends
-  // here.
-  masm.branchTest32(Assembler::Signed, lhs, lhs, failure->label());
-
-  // Negative divisor (could be fixed with abs)
-  masm.branchTest32(Assembler::Signed, rhs, rhs, failure->label());
-
   // x % 0 results in NaN
   masm.branchTest32(Assembler::Zero, rhs, rhs, failure->label());
 
-  // Prevent negative 0 and -2147483648 / -1.
-  masm.branch32(Assembler::Equal, lhs, Imm32(INT32_MIN), failure->label());
+  // Prevent -2147483648 % -1.
+  //
+  // Traps on x86 and has undefined behavior on ARM32 (when __aeabi_idivmod is
+  // called).
+  Label notOverflow;
+  masm.branch32(Assembler::NotEqual, lhs, Imm32(INT32_MIN), &notOverflow);
+  masm.branch32(Assembler::Equal, rhs, Imm32(-1), failure->label());
+  masm.bind(&notOverflow);
+
   masm.mov(lhs, scratch);
   LiveRegisterSet volatileRegs(GeneralRegisterSet::Volatile(),
                                liveVolatileFloatRegs());
   masm.flexibleRemainder32(rhs, scratch, false, volatileRegs);
+
+  // Modulo takes the sign of the dividend; we can't return negative zero here.
+  Label notZero;
+  masm.branchTest32(Assembler::NonZero, scratch, scratch, &notZero);
+  masm.branchTest32(Assembler::Signed, lhs, lhs, failure->label());
+  masm.bind(&notZero);
 
   EmitStoreResult(masm, scratch, JSVAL_TYPE_INT32, output);
 
@@ -4958,8 +4968,8 @@ static void EmitDataViewBoundsCheck(MacroAssembler& masm, size_t byteSize,
                                     Register obj, Register offset,
                                     Register scratch, Label* fail) {
   // Ensure both offset < length and offset + (byteSize - 1) < length.
-  static_assert(ArrayBufferObject::MaxBufferByteLength <= INT32_MAX,
-                "Code assumes DataView length fits in int32");
+  MOZ_ASSERT(ArrayBufferObject::maxBufferByteLength() <= INT32_MAX,
+             "Code assumes DataView length fits in int32");
   masm.loadArrayBufferViewLengthInt32(obj, scratch);
   if (byteSize == 1) {
     masm.spectreBoundsCheck32(offset, scratch, InvalidReg, fail);

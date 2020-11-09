@@ -16,6 +16,8 @@ add_task(async function setup() {
       ["browser.urlbar.update2", true],
       ["browser.urlbar.update2.localOneOffs", true],
       ["browser.urlbar.update2.oneOffsRefresh", true],
+      // TODO (Bug 1675558) - This should not be a requirement for the whole test.
+      ["browser.urlbar.update2.emptySearchBehavior", 2],
     ],
   });
   let testEngine = await Services.search.addEngineWithDetails(
@@ -82,7 +84,7 @@ add_task(async function tokenAlias() {
   let searchPromise = UrlbarTestUtils.promiseSearchComplete(window);
   EventUtils.synthesizeKey("KEY_Enter");
   await searchPromise;
-  // Test that we are in non-preview search mode.
+  // Test that we are in confirmed search mode.
   await UrlbarTestUtils.assertSearchMode(window, {
     engineName: result.searchParams.engine,
     entry: "keywordoffer",

@@ -129,13 +129,13 @@ static void linear_row_blit(uint8_t* dest, int span, const vec2_scalar& srcUV,
   vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
   for (; span >= 4; span -= 4) {
     auto srcpx = textureLinearPackedR8(sampler, ivec2(uv), srcZOffset);
-    unaligned_store(dest, pack(srcpx));
+    unaligned_store(dest, srcpx);
     dest += 4;
     uv.x += 4 * srcDU;
   }
   if (span > 0) {
     auto srcpx = textureLinearPackedR8(sampler, ivec2(uv), srcZOffset);
-    partial_store_span(dest, pack(srcpx), span);
+    partial_store_span(dest, srcpx, span);
   }
 }
 
@@ -446,7 +446,9 @@ void Composite(LockedTexture* lockedDst, LockedTexture* lockedSrc, GLint srcX,
   IntRect dstReq = {dstX, dstY, dstX + dstWidth, dstY + dstHeight};
 
   if (opaque) {
-    if (!srcReq.same_size(dstReq) && filter == GL_LINEAR) {
+    // Ensure we have rows of at least 2 pixels when using the linear filter
+    // to avoid overreading the row.
+    if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR) {
       linear_blit(srctex, srcReq, 0, dsttex, dstReq, 0, flip, bandOffset,
                   bandHeight);
     } else {
@@ -454,7 +456,7 @@ void Composite(LockedTexture* lockedDst, LockedTexture* lockedSrc, GLint srcX,
                  bandHeight);
     }
   } else {
-    if (!srcReq.same_size(dstReq)) {
+    if (!srcReq.same_size(dstReq) && srctex.width >= 2) {
       linear_composite(srctex, srcReq, dsttex, dstReq, flip, bandOffset,
                        bandHeight);
     } else {
@@ -555,9 +557,8 @@ struct YUVConverter {};
 // [G] = [1.1643835616438358, -0.3917622900949137, -0.8129676472377708   ] x [U - 128]
 // [B]   [1.1643835616438356,  2.017232142857143,   8.862867620416422e-17]   [V - 128]
 // clang-format on
-static constexpr double YUVMatrix601[4] = {
-    1.5960267857142858, -0.3917622900949137, -0.8129676472377708,
-    2.017232142857143};
+constexpr double YUVMatrix601[4] = {1.5960267857142858, -0.3917622900949137,
+                                    -0.8129676472377708, 2.017232142857143};
 template <>
 struct YUVConverter<REC_601> : YUVConverterImpl<YUVMatrix601> {};
 
@@ -716,18 +717,18 @@ static void linear_row_yuv(uint32_t* dest, int span, const vec2_scalar& srcUV,
     // transform them by the appropriate color space.
     assert(colorDepth > 8);
     // Need to right shift the sample by the amount of bits over 8 it occupies.
-    // On output from textureLinearPackedR16, we have lost 1 bit of precision
+    // On output from textureLinearUnpackedR16, we have lost 1 bit of precision
     // at the low end already, hence 1 is subtracted from the color depth.
     int rescaleBits = (colorDepth - 1) - 8;
     for (; span >= 4; span -= 4) {
       auto yPx =
-          textureLinearPackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
+          textureLinearUnpackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
           rescaleBits;
       auto uPx =
-          textureLinearPackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       auto vPx =
-          textureLinearPackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       unaligned_store(dest, YUVConverter<COLOR_SPACE>::convert(zip(yPx, yPx),
                                                                zip(uPx, vPx)));
@@ -738,13 +739,13 @@ static void linear_row_yuv(uint32_t* dest, int span, const vec2_scalar& srcUV,
     if (span > 0) {
       // Handle any remaining pixels...
       auto yPx =
-          textureLinearPackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
+          textureLinearUnpackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
           rescaleBits;
       auto uPx =
-          textureLinearPackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       auto vPx =
-          textureLinearPackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       partial_store_span(
           dest,

@@ -15,6 +15,7 @@
 #include "nsEscape.h"
 #include "nsHttpTransaction.h"
 #include "nsICancelable.h"
+#include "nsICachingChannel.h"
 #include "nsIHttpPushListener.h"
 #include "nsIProtocolProxyService2.h"
 #include "nsIOService.h"
@@ -560,6 +561,9 @@ nsresult TRRServiceChannel::SetupTransaction() {
 
   if (!mAllowSpdy) {
     mCaps |= NS_HTTP_DISALLOW_SPDY;
+  }
+  if (!mAllowHttp3) {
+    mCaps |= NS_HTTP_DISALLOW_HTTP3;
   }
   if (mBeConservative) {
     mCaps |= NS_HTTP_BE_CONSERVATIVE;

@@ -986,8 +986,12 @@ pub trait Compositor {
 
     /// Notify the compositor that all tiles have been invalidated and all
     /// native surfaces have been added, thus it is safe to start compositing
-    /// valid surfaces.
-    fn start_compositing(&mut self) {}
+    /// valid surfaces. The dirty rects array allows native compositors that
+    /// support partial present to skip copying unchanged areas.
+    fn start_compositing(
+        &mut self,
+        _dirty_rects: &[DeviceIntRect],
+    ) {}
 
     /// Commit any changes in the compositor tree for this frame. WR calls
     /// this once when all surface and visual updates are complete, to signal
@@ -1011,10 +1015,6 @@ pub trait Compositor {
 /// TODO: Use the Compositor trait for native and non-native compositors, and integrate
 /// this functionality there.
 pub trait PartialPresentCompositor {
-    /// Returns the age of the current backbuffer. This should be used, if
-    /// draw_previous_partial_present_regions is true, to determine the
-    /// region which must be rendered in addition to the current frame's dirty rect.
-    fn get_buffer_age(&self) -> usize;
     /// Allows webrender to specify the total region that will be rendered to this frame,
     /// ie the frame's dirty region and some previous frames' dirty regions, if applicable
     /// (calculated using the buffer age). Must be called before anything has been rendered

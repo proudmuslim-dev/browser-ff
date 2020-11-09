@@ -38,6 +38,7 @@
 #include "Geolocation.h"
 #include "GfxInfoBase.h"
 #include "MMPrinter.h"
+#include "PDMFactory.h"
 #include "PreallocatedProcessManager.h"
 #include "ProcessPriorityManager.h"
 #include "SandboxHal.h"
@@ -842,7 +843,6 @@ already_AddRefed<ContentParent> ContentParent::MinTabSelect(
   for (uint32_t i = 0; i < maxSelectable; i++) {
     ContentParent* p = aContentParents[i];
     MOZ_DIAGNOSTIC_ASSERT(!p->IsDead());
-    MOZ_DIAGNOSTIC_ASSERT(!p->mShutdownPending);
 
     uint32_t tabCount = cpm->GetBrowserParentCountByProcessId(p->ChildID());
     if (tabCount < min) {
@@ -860,6 +860,21 @@ already_AddRefed<ContentParent> ContentParent::MinTabSelect(
 
   // Otherwise we return candidate.
   return candidate.forget();
+}
+
+static already_AddRefed<nsIPrincipal> CreateRemoteTypeIsolationPrincipal(
+    const nsACString& aRemoteType) {
+  if ((RemoteTypePrefix(aRemoteType) != FISSION_WEB_REMOTE_TYPE) &&
+      !StringBeginsWith(aRemoteType, WITH_COOP_COEP_REMOTE_TYPE_PREFIX)) {
+    return nullptr;
+  }
+
+  int32_t offset = aRemoteType.FindChar('=') + 1;
+  MOZ_ASSERT(offset > 1, "can not extract origin from that remote type");
+  nsAutoCString origin(
+      Substring(aRemoteType, offset, aRemoteType.Length() - offset));
+
+  return BasePrincipal::CreateContentPrincipal(origin);
 }
 
 /*static*/
@@ -975,6 +990,8 @@ already_AddRefed<ContentParent> ContentParent::GetUsedBrowserProcess(
     preallocated->AddToPool(aContentParents);
 
     preallocated->mRemoteType.Assign(aRemoteType);
+    preallocated->mRemoteTypeIsolationPrincipal =
+        CreateRemoteTypeIsolationPrincipal(aRemoteType);
     Unused << preallocated->SendRemoteType(preallocated->mRemoteType);
 
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
@@ -1117,32 +1134,23 @@ RefPtr<ContentParent::LaunchPromise> ContentParent::WaitForLaunchAsync(
   // We've started an async content process launch.
   Telemetry::Accumulate(Telemetry::CONTENT_PROCESS_LAUNCH_IS_SYNC, 0);
 
-  // We have located a process that hasn't finished initializing. Let's race
-  // against whoever launched it (and whoever else is already racing). Once
-  // the race is complete, the winner will finish the initialization.
+  // We have located a process that hasn't finished initializing, then attempt
+  // to finish initializing. Both `LaunchSubprocessResolve` and
+  // `LaunchSubprocessReject` are safe to call multiple times if we race with
+  // other `WaitForLaunchAsync` callbacks.
   return mSubprocess->WhenProcessHandleReady()->Then(
       GetCurrentSerialEventTarget(), __func__,
-      // On resolve.
-      [self = RefPtr{this}, aPriority]() {
-        if (self->IsLaunching()) {
-          if (!self->LaunchSubprocessResolve(/* aIsSync = */ false,
-                                             aPriority)) {
-            self->LaunchSubprocessReject();
-            return LaunchPromise::CreateAndReject(LaunchError(), __func__);
-          }
+      [self = RefPtr{this}, aPriority] {
+        if (self->LaunchSubprocessResolve(/* aIsSync = */ false, aPriority)) {
           self->mActivateTS = TimeStamp::Now();
-        } else if (self->IsDead()) {
-          // This could happen if we're racing against a sync launch and it
-          // failed.
-          return LaunchPromise::CreateAndReject(LaunchError(), __func__);
+          return LaunchPromise::CreateAndResolve(self, __func__);
         }
-        return LaunchPromise::CreateAndResolve(self, __func__);
+
+        self->LaunchSubprocessReject();
+        return LaunchPromise::CreateAndReject(LaunchError(), __func__);
       },
-      // On reject.
-      [self = RefPtr{this}]() {
-        if (self->IsLaunching()) {
-          self->LaunchSubprocessReject();
-        }
+      [self = RefPtr{this}] {
+        self->LaunchSubprocessReject();
         return LaunchPromise::CreateAndReject(LaunchError(), __func__);
       });
 }
@@ -1209,7 +1217,7 @@ void ContentParent::SendAsyncUpdate(nsIWidget* aWidget) {
   NS_ASSERTION(hwnd, "Expected valid hwnd value.");
   ContentParent* cp = reinterpret_cast<ContentParent*>(
       ::GetPropW(hwnd, kPluginWidgetContentParentProperty));
-  if (cp && !cp->IsDestroyed()) {
+  if (cp && cp->CanSend()) {
     Unused << cp->SendUpdateWindow((uintptr_t)hwnd);
   }
 }
@@ -1483,13 +1491,6 @@ void ContentParent::Init() {
 
   AddShutdownBlockers();
 
-  // Flush any pref updates that happened during launch and weren't
-  // included in the blobs set up in BeginSubprocessLaunch.
-  for (const Pref& pref : mQueuedPrefs) {
-    Unused << NS_WARN_IF(!SendPreferenceUpdate(pref));
-  }
-  mQueuedPrefs.Clear();
-
   if (obs) {
     nsAutoString cpId;
     cpId.AppendInt(static_cast<uint64_t>(this->ChildID()));
@@ -1525,6 +1526,13 @@ void ContentParent::Init() {
   RefPtr<GeckoMediaPluginServiceParent> gmps(
       GeckoMediaPluginServiceParent::GetSingleton());
   gmps->UpdateContentProcessGMPCapabilities();
+
+  // Flush any pref updates that happened during launch and weren't
+  // included in the blobs set up in BeginSubprocessLaunch.
+  for (const Pref& pref : mQueuedPrefs) {
+    Unused << NS_WARN_IF(!SendPreferenceUpdate(pref));
+  }
+  mQueuedPrefs.Clear();
 }
 
 void ContentParent::MaybeBeginShutDown(uint32_t aExpectedBrowserCount,
@@ -1580,15 +1588,18 @@ void ContentParent::MaybeAsyncSendShutDownMessage() {
 }
 
 void ContentParent::ShutDownProcess(ShutDownMethod aMethod) {
+  // NB: must MarkAsDead() here so that this isn't accidentally
+  // returned from Get*() while in the midst of shutdown.
+  MarkAsDead();
+
   // Shutting down by sending a shutdown message works differently than the
   // other methods. We first call Shutdown() in the child. After the child is
   // ready, it calls FinishShutdown() on us. Then we close the channel.
   if (aMethod == SEND_SHUTDOWN_MESSAGE) {
-    if (mIPCOpen && !mShutdownPending) {
+    if (CanSend() && !mShutdownPending) {
       // Stop sending input events with input priority when shutting down.
       SetInputPriorityEventEnabled(false);
       if (SendShutdown()) {
-        RemoveFromList();
         mShutdownPending = true;
         // Start the force-kill timer if we haven't already.
         StartForceKillTimer();
@@ -1623,10 +1634,6 @@ void ContentParent::ShutDownProcess(ShutDownMethod aMethod) {
             iter.Get()->GetKey());
     ocuParent->StopSendingMessagesToChild();
   }
-
-  // NB: must MarkAsDead() here so that this isn't accidentally
-  // returned from Get*() while in the midst of shutdown.
-  MarkAsDead();
 
   // A ContentParent object might not get freed until after XPCOM shutdown has
   // shut down the cycle collector.  But by then it's too late to release any
@@ -1694,10 +1701,7 @@ void ContentParent::AssertNotInPool() {
   }
 }
 
-void ContentParent::AssertAlive() {
-  MOZ_DIAGNOSTIC_ASSERT(!IsDead());
-  MOZ_DIAGNOSTIC_ASSERT(!mShutdownPending);
-}
+void ContentParent::AssertAlive() { MOZ_DIAGNOSTIC_ASSERT(!IsDead()); }
 
 void ContentParent::RemoveFromList() {
   if (IsForJSPlugin()) {
@@ -1752,14 +1756,12 @@ void ContentParent::MarkAsDead() {
   MOZ_LOG(ContentParent::GetLog(), LogLevel::Verbose,
           ("Marking ContentProcess %p as dead", this));
   MOZ_DIAGNOSTIC_ASSERT(!sInProcessSelector);
-  if (!mShutdownPending) {
-    RemoveFromList();
-  }
+  RemoveFromList();
 
   PreallocatedProcessManager::Erase(this);
 
 #ifdef MOZ_WIDGET_ANDROID
-  if (mLifecycleState == LifecycleState::ALIVE) {
+  if (IsAlive()) {
     // We're intentionally killing the content process at this point to ensure
     // that we never have a "dead" content process sitting around and occupying
     // an Android Service.
@@ -1818,8 +1820,6 @@ void ContentParent::ActorDestroy(ActorDestroyReason why) {
 
   // Signal shutdown completion regardless of error state, so we can
   // finish waiting in the xpcom-shutdown/profile-before-change observer.
-  mIPCOpen = false;
-
   RemoveShutdownBlockers();
 
   if (mHangMonitorActor) {
@@ -1999,7 +1999,7 @@ bool ContentParent::TryToRecycle() {
       ("TryToRecycle ContentProcess %p (%u) with lifespan %f seconds", this,
        (unsigned int)ChildID(), (TimeStamp::Now() - mActivateTS).ToSeconds()));
 
-  if (mShutdownPending || mCalledKillHard || !IsAlive() ||
+  if (mCalledKillHard || !IsAlive() ||
       (TimeStamp::Now() - mActivateTS).ToSeconds() > kMaxLifeSpan) {
     MOZ_LOG(ContentParent::GetLog(), LogLevel::Debug,
             ("TryToRecycle did not recycle %p", this));
@@ -2070,8 +2070,12 @@ bool ContentParent::ShouldKeepProcessAlive() {
     return true;
   }
 
+  if (IsLaunching()) {
+    return true;
+  }
+
   // If we have already been marked as dead, don't prevent shutdown.
-  if (!IsAlive()) {
+  if (IsDead()) {
     return false;
   }
 
@@ -2144,7 +2148,7 @@ void ContentParent::RemoveKeepAlive() {
 }
 
 void ContentParent::StartForceKillTimer() {
-  if (mForceKillTimer || !mIPCOpen) {
+  if (mForceKillTimer || !CanSend()) {
     return;
   }
 
@@ -2389,6 +2393,18 @@ void ContentParent::LaunchSubprocessReject() {
 bool ContentParent::LaunchSubprocessResolve(bool aIsSync,
                                             ProcessPriority aPriority) {
   AUTO_PROFILER_LABEL("ContentParent::LaunchSubprocess::resolve", OTHER);
+
+  // Take the pending IPC channel. This channel will be used to open the raw IPC
+  // connection between this process and the launched content process.
+  UniquePtr<IPC::Channel> channel = mSubprocess->TakeChannel();
+  if (!channel) {
+    // We don't have a channel, so this method must've been called already.
+    MOZ_ASSERT(sCreatedFirstContentProcess);
+    MOZ_ASSERT(!mPrefSerializer);
+    MOZ_ASSERT(mLifecycleState != LifecycleState::LAUNCHING);
+    return true;
+  }
+
   // Now that communication with the child is complete, we can cleanup
   // the preference serializer.
   mPrefSerializer = nullptr;
@@ -2413,7 +2429,7 @@ bool ContentParent::LaunchSubprocessResolve(bool aIsSync,
 
   base::ProcessId procId =
       base::GetProcId(mSubprocess->GetChildProcessHandle());
-  Open(mSubprocess->TakeChannel(), procId);
+  Open(std::move(channel), procId);
 
   ContentProcessManager::GetSingleton()->AddContentProcess(this);
 
@@ -2422,7 +2438,16 @@ bool ContentParent::LaunchSubprocessResolve(bool aIsSync,
       CodeCoverageHandler::Get()->GetMutexHandle(procId));
 #endif
 
+  // We must be in the LAUNCHING state still. If we've somehow already been
+  // marked as DEAD, fail the process launch, and immediately begin tearing down
+  // the content process.
+  if (IsDead()) {
+    ShutDownProcess(SEND_SHUTDOWN_MESSAGE);
+    return false;
+  }
+  MOZ_ASSERT(mLifecycleState == LifecycleState::LAUNCHING);
   mLifecycleState = LifecycleState::ALIVE;
+
   if (!InitInternal(aPriority)) {
     NS_WARNING("failed to initialize child in the parent");
     // We've already called Open() by this point, so we need to close the
@@ -2445,6 +2470,8 @@ bool ContentParent::LaunchSubprocessResolve(bool aIsSync,
   }
 
   Init();
+
+  mLifecycleState = LifecycleState::INITIALIZED;
 
   if (aIsSync) {
     Telemetry::AccumulateTimeDelta(Telemetry::CONTENT_PROCESS_SYNC_LAUNCH_MS,
@@ -2528,13 +2555,15 @@ ContentParent::ContentParent(const nsACString& aRemoteType, int32_t aJSPluginID)
       mCalledKillHard(false),
       mCreatedPairedMinidumps(false),
       mShutdownPending(false),
-      mIPCOpen(true),
       mIsRemoteInputEventQueueEnabled(false),
       mIsInputPriorityEventEnabled(false),
       mIsInPool(false),
       mHangMonitorActor(nullptr) {
   MOZ_DIAGNOSTIC_ASSERT(!IsForJSPlugin(),
                         "XXX(nika): How are we creating a JSPlugin?");
+
+  mRemoteTypeIsolationPrincipal =
+      CreateRemoteTypeIsolationPrincipal(aRemoteType);
 
   // Insert ourselves into the global linked list of ContentParent objects.
   if (!sContentParents) {
@@ -2738,6 +2767,10 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
 
   // Send the dynamic scalar definitions to the new process.
   TelemetryIPC::GetDynamicScalarDefinitions(xpcomInit.dynamicScalarDefs());
+
+  // Pre-calculate the various PlatformDecoderModule (PDM) supported on this
+  // machine.
+  xpcomInit.codecsSupported() = PDMFactory::Supported();
 
   // Must send screen info before send initialData
   ScreenManager& screenManager = ScreenManager::GetSingleton();
@@ -2984,7 +3017,12 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
 }
 
 bool ContentParent::IsAlive() const {
-  return mLifecycleState == LifecycleState::ALIVE;
+  return mLifecycleState == LifecycleState::ALIVE ||
+         mLifecycleState == LifecycleState::INITIALIZED;
+}
+
+bool ContentParent::IsInitialized() const {
+  return mLifecycleState == LifecycleState::INITIALIZED;
 }
 
 int32_t ContentParent::Pid() const {
@@ -3066,7 +3104,7 @@ bool ContentParent::IsInputEventQueueSupported() {
 }
 
 void ContentParent::OnVarChanged(const GfxVarUpdate& aVar) {
-  if (!mIPCOpen) {
+  if (!CanSend()) {
     return;
   }
   Unused << SendVarUpdate(aVar);
@@ -3326,13 +3364,13 @@ ContentParent::Observe(nsISupports* aSubject, const char* aTopic,
 
     Pref pref(strData, /* isLocked */ false, Nothing(), Nothing());
     Preferences::GetPreference(&pref);
-    if (IsAlive()) {
+    if (IsInitialized()) {
       MOZ_ASSERT(mQueuedPrefs.IsEmpty());
       if (!SendPreferenceUpdate(pref)) {
         return NS_ERROR_NOT_AVAILABLE;
       }
     } else {
-      MOZ_ASSERT(IsLaunching());
+      MOZ_ASSERT(!IsDead());
       mQueuedPrefs.AppendElement(pref);
     }
   }
@@ -5416,8 +5454,7 @@ mozilla::ipc::IPCResult ContentParent::RecvSetupFamilyCharMap(
 }
 
 mozilla::ipc::IPCResult ContentParent::RecvGetHyphDict(
-    nsIURI* aURI, base::SharedMemoryHandle* aOutHandle,
-    uint32_t* aOutSize) {
+    nsIURI* aURI, base::SharedMemoryHandle* aOutHandle, uint32_t* aOutSize) {
   if (!aURI) {
     return IPC_FAIL_NO_REASON(this);
   }
@@ -7065,12 +7102,10 @@ ContentParent::RecvGetLoadingSessionHistoryInfoFromParent(
 mozilla::ipc::IPCResult ContentParent::RecvSetActiveSessionHistoryEntry(
     const MaybeDiscarded<BrowsingContext>& aContext,
     const Maybe<nsPoint>& aPreviousScrollPos, SessionHistoryInfo&& aInfo,
-    uint32_t aLoadType, int32_t aChildOffset, uint32_t aUpdatedCacheKey,
-    const nsID& aChangeID) {
+    uint32_t aLoadType, uint32_t aUpdatedCacheKey, const nsID& aChangeID) {
   if (!aContext.IsDiscarded()) {
     aContext.get_canonical()->SetActiveSessionHistoryEntry(
-        aPreviousScrollPos, &aInfo, aLoadType, aChildOffset, aUpdatedCacheKey,
-        aChangeID);
+        aPreviousScrollPos, &aInfo, aLoadType, aUpdatedCacheKey, aChangeID);
   }
   return IPC_OK();
 }

@@ -54,11 +54,11 @@ use crate::{
 };
 
 use ::libc::{self, free, malloc};
-use std::{ptr::null_mut, sync::atomic::Ordering};
 use std::sync::Arc;
+use std::{ptr::null_mut, sync::atomic::Ordering};
 
-const PRECACHE_OUTPUT_SIZE: usize = 8192;
-const PRECACHE_OUTPUT_MAX: usize = PRECACHE_OUTPUT_SIZE - 1;
+pub const PRECACHE_OUTPUT_SIZE: usize = 8192;
+pub const PRECACHE_OUTPUT_MAX: usize = PRECACHE_OUTPUT_SIZE - 1;
 pub const FLOATSCALE: f32 = PRECACHE_OUTPUT_SIZE as f32;
 pub const CLAMPMAXVAL: f32 = ((PRECACHE_OUTPUT_SIZE - 1) as f32) / PRECACHE_OUTPUT_SIZE as f32;
 
@@ -89,9 +89,9 @@ impl Default for precache_output {
 #[derive(Clone)]
 pub struct qcms_transform {
     pub matrix: [[f32; 4]; 3],
-    pub input_gamma_table_r: *mut f32,
-    pub input_gamma_table_g: *mut f32,
-    pub input_gamma_table_b: *mut f32,
+    pub input_gamma_table_r: Option<Vec<f32>>,
+    pub input_gamma_table_g: Option<Vec<f32>>,
+    pub input_gamma_table_b: Option<Vec<f32>>,
     pub input_clut_table_r: *mut f32,
     pub input_clut_table_g: *mut f32,
     pub input_clut_table_b: *mut f32,
@@ -104,15 +104,15 @@ pub struct qcms_transform {
     pub output_clut_table_g: *mut f32,
     pub output_clut_table_b: *mut f32,
     pub output_clut_table_length: u16,
-    pub input_gamma_table_gray: *mut f32,
+    pub input_gamma_table_gray: Option<Vec<f32>>,
     pub out_gamma_r: f32,
     pub out_gamma_g: f32,
     pub out_gamma_b: f32,
     pub out_gamma_gray: f32,
-    pub output_gamma_lut_r: *mut u16,
-    pub output_gamma_lut_g: *mut u16,
-    pub output_gamma_lut_b: *mut u16,
-    pub output_gamma_lut_gray: *mut u16,
+    pub output_gamma_lut_r: Option<Vec<u16>>,
+    pub output_gamma_lut_g: Option<Vec<u16>>,
+    pub output_gamma_lut_b: Option<Vec<u16>>,
+    pub output_gamma_lut_gray: Option<Vec<u16>>,
     pub output_gamma_lut_r_length: usize,
     pub output_gamma_lut_g_length: usize,
     pub output_gamma_lut_b_length: usize,
@@ -127,9 +127,9 @@ impl Default for qcms_transform {
     fn default() -> qcms_transform {
         qcms_transform {
             matrix: Default::default(),
-            input_gamma_table_r: null_mut(),
-            input_gamma_table_b: null_mut(),
-            input_gamma_table_g: null_mut(),
+            input_gamma_table_r: Default::default(),
+            input_gamma_table_b: Default::default(),
+            input_gamma_table_g: Default::default(),
             input_clut_table_r: null_mut(),
             input_clut_table_g: null_mut(),
             input_clut_table_b: null_mut(),
@@ -142,15 +142,15 @@ impl Default for qcms_transform {
             output_clut_table_g: null_mut(),
             output_clut_table_b: null_mut(),
             output_clut_table_length: Default::default(),
-            input_gamma_table_gray: null_mut(),
+            input_gamma_table_gray: Default::default(),
             out_gamma_r: Default::default(),
             out_gamma_g: Default::default(),
             out_gamma_b: Default::default(),
             out_gamma_gray: Default::default(),
-            output_gamma_lut_r: null_mut(),
-            output_gamma_lut_g: null_mut(),
-            output_gamma_lut_b: null_mut(),
-            output_gamma_lut_gray: null_mut(),
+            output_gamma_lut_r: Default::default(),
+            output_gamma_lut_g: Default::default(),
+            output_gamma_lut_b: Default::default(),
+            output_gamma_lut_gray: Default::default(),
             output_gamma_lut_r_length: Default::default(),
             output_gamma_lut_g_length: Default::default(),
             output_gamma_lut_b_length: Default::default(),
@@ -159,7 +159,7 @@ impl Default for qcms_transform {
             output_table_g: Default::default(),
             output_table_b: Default::default(),
             transform_fn: Default::default(),
-         }
+        }
     }
 }
 
@@ -513,6 +513,11 @@ unsafe extern "C" fn qcms_transform_data_gray_template_lut<I: GrayFormat, F: For
     mut length: usize,
 ) {
     let components: libc::c_uint = if F::kAIndex == 0xff { 3 } else { 4 } as libc::c_uint;
+    let input_gamma_table_gray = (*transform)
+        .input_gamma_table_gray
+        .as_ref()
+        .unwrap()
+        .as_ptr();
 
     let mut i: libc::c_uint = 0;
     while (i as usize) < length {
@@ -525,22 +530,19 @@ unsafe extern "C" fn qcms_transform_data_gray_template_lut<I: GrayFormat, F: For
             src = src.offset(1);
             alpha = *fresh1
         }
-        let mut linear: f32 = *(*transform).input_gamma_table_gray.offset(device as isize);
+        let mut linear: f32 = *input_gamma_table_gray.offset(device as isize);
 
         let mut out_device_r: f32 = lut_interp_linear(
             linear as f64,
-            (*transform).output_gamma_lut_r,
-            (*transform).output_gamma_lut_r_length as i32,
+            &(*transform).output_gamma_lut_r.as_ref().unwrap(),
         );
         let mut out_device_g: f32 = lut_interp_linear(
             linear as f64,
-            (*transform).output_gamma_lut_g,
-            (*transform).output_gamma_lut_g_length as i32,
+            &(*transform).output_gamma_lut_g.as_ref().unwrap(),
         );
         let mut out_device_b: f32 = lut_interp_linear(
             linear as f64,
-            (*transform).output_gamma_lut_b,
-            (*transform).output_gamma_lut_b_length as i32,
+            &(*transform).output_gamma_lut_b.as_ref().unwrap(),
         );
         *dest.offset(F::kRIndex as isize) = clamp_u8(out_device_r * 255f32);
         *dest.offset(F::kGIndex as isize) = clamp_u8(out_device_g * 255f32);
@@ -603,6 +605,12 @@ unsafe extern "C" fn qcms_transform_data_gray_template_precache<I: GrayFormat, F
     let output_table_g = ((*transform).output_table_g).as_deref().unwrap();
     let output_table_b = ((*transform).output_table_b).as_deref().unwrap();
 
+    let input_gamma_table_gray = (*transform)
+        .input_gamma_table_gray
+        .as_ref()
+        .unwrap()
+        .as_ptr();
+
     let mut i: libc::c_uint = 0;
     while (i as usize) < length {
         let fresh2 = src;
@@ -615,7 +623,7 @@ unsafe extern "C" fn qcms_transform_data_gray_template_precache<I: GrayFormat, F
             alpha = *fresh3
         }
 
-        let mut linear: f32 = *(*transform).input_gamma_table_gray.offset(device as isize);
+        let mut linear: f32 = *input_gamma_table_gray.offset(device as isize);
         /* we could round here... */
         let mut gray: u16 = (linear * (8192 - 1) as f32) as u16;
         *dest.offset(F::kRIndex as isize) = (output_table_r).data[gray as usize];
@@ -678,6 +686,9 @@ unsafe extern "C" fn qcms_transform_data_template_lut_precache<F: Format>(
     let output_table_r = ((*transform).output_table_r).as_deref().unwrap();
     let output_table_g = ((*transform).output_table_g).as_deref().unwrap();
     let output_table_b = ((*transform).output_table_b).as_deref().unwrap();
+    let input_gamma_table_r = (*transform).input_gamma_table_r.as_ref().unwrap().as_ptr();
+    let input_gamma_table_g = (*transform).input_gamma_table_g.as_ref().unwrap().as_ptr();
+    let input_gamma_table_b = (*transform).input_gamma_table_b.as_ref().unwrap().as_ptr();
 
     let mut mat: *const [f32; 4] = (*transform).matrix.as_ptr();
     let mut i: libc::c_uint = 0;
@@ -691,9 +702,9 @@ unsafe extern "C" fn qcms_transform_data_template_lut_precache<F: Format>(
         }
         src = src.offset(components as isize);
 
-        let mut linear_r: f32 = *(*transform).input_gamma_table_r.offset(device_r as isize);
-        let mut linear_g: f32 = *(*transform).input_gamma_table_g.offset(device_g as isize);
-        let mut linear_b: f32 = *(*transform).input_gamma_table_b.offset(device_b as isize);
+        let mut linear_r: f32 = *input_gamma_table_r.offset(device_r as isize);
+        let mut linear_g: f32 = *input_gamma_table_g.offset(device_g as isize);
+        let mut linear_b: f32 = *input_gamma_table_b.offset(device_b as isize);
         let mut out_linear_r: f32 = (*mat.offset(0isize))[0] * linear_r
             + (*mat.offset(1isize))[0] * linear_g
             + (*mat.offset(2isize))[0] * linear_b;
@@ -1013,6 +1024,9 @@ unsafe extern "C" fn qcms_transform_data_template_lut<F: Format>(
 
     let mut mat: *const [f32; 4] = (*transform).matrix.as_ptr();
     let mut i: libc::c_uint = 0;
+    let input_gamma_table_r = (*transform).input_gamma_table_r.as_ref().unwrap().as_ptr();
+    let input_gamma_table_g = (*transform).input_gamma_table_g.as_ref().unwrap().as_ptr();
+    let input_gamma_table_b = (*transform).input_gamma_table_b.as_ref().unwrap().as_ptr();
     while (i as usize) < length {
         let mut device_r: libc::c_uchar = *src.offset(F::kRIndex as isize);
         let mut device_g: libc::c_uchar = *src.offset(F::kGIndex as isize);
@@ -1023,9 +1037,9 @@ unsafe extern "C" fn qcms_transform_data_template_lut<F: Format>(
         }
         src = src.offset(components as isize);
 
-        let mut linear_r: f32 = *(*transform).input_gamma_table_r.offset(device_r as isize);
-        let mut linear_g: f32 = *(*transform).input_gamma_table_g.offset(device_g as isize);
-        let mut linear_b: f32 = *(*transform).input_gamma_table_b.offset(device_b as isize);
+        let mut linear_r: f32 = *input_gamma_table_r.offset(device_r as isize);
+        let mut linear_g: f32 = *input_gamma_table_g.offset(device_g as isize);
+        let mut linear_b: f32 = *input_gamma_table_b.offset(device_b as isize);
         let mut out_linear_r: f32 = (*mat.offset(0isize))[0] * linear_r
             + (*mat.offset(1isize))[0] * linear_g
             + (*mat.offset(2isize))[0] * linear_b;
@@ -1041,18 +1055,15 @@ unsafe extern "C" fn qcms_transform_data_template_lut<F: Format>(
 
         let mut out_device_r: f32 = lut_interp_linear(
             out_linear_r as f64,
-            (*transform).output_gamma_lut_r,
-            (*transform).output_gamma_lut_r_length as i32,
+            &(*transform).output_gamma_lut_r.as_ref().unwrap(),
         );
         let mut out_device_g: f32 = lut_interp_linear(
             out_linear_g as f64,
-            (*transform).output_gamma_lut_g,
-            (*transform).output_gamma_lut_g_length as i32,
+            (*transform).output_gamma_lut_g.as_ref().unwrap(),
         );
         let mut out_device_b: f32 = lut_interp_linear(
             out_linear_b as f64,
-            (*transform).output_gamma_lut_b,
-            (*transform).output_gamma_lut_b_length as i32,
+            (*transform).output_gamma_lut_b.as_ref().unwrap(),
         );
         *dest.offset(F::kRIndex as isize) = clamp_u8(out_device_r * 255f32);
         *dest.offset(F::kGIndex as isize) = clamp_u8(out_device_g * 255f32);
@@ -1110,19 +1121,14 @@ pub unsafe extern "C" fn qcms_transform_release(mut t: *mut qcms_transform) {
     (*t).output_table_g = None;
     (*t).output_table_b = None;
 
-    free((*t).input_gamma_table_r as *mut libc::c_void);
-    if (*t).input_gamma_table_g != (*t).input_gamma_table_r {
-        free((*t).input_gamma_table_g as *mut libc::c_void);
-    }
-    if (*t).input_gamma_table_g != (*t).input_gamma_table_r
-        && (*t).input_gamma_table_g != (*t).input_gamma_table_b
-    {
-        free((*t).input_gamma_table_b as *mut libc::c_void);
-    }
-    free((*t).input_gamma_table_gray as *mut libc::c_void);
-    free((*t).output_gamma_lut_r as *mut libc::c_void);
-    free((*t).output_gamma_lut_g as *mut libc::c_void);
-    free((*t).output_gamma_lut_b as *mut libc::c_void);
+    (*t).input_gamma_table_r = None;
+    (*t).input_gamma_table_g = None;
+    (*t).input_gamma_table_b = None;
+
+    (*t).input_gamma_table_gray = None;
+    (*t).output_gamma_lut_r = None;
+    (*t).output_gamma_lut_g = None;
+    (*t).output_gamma_lut_b = None;
     /* r_clut points to beginning of buffer allocated in qcms_transform_precacheLUT_float */
     if !(*t).r_clut.is_null() {
         free((*t).r_clut as *mut libc::c_void);
@@ -1233,8 +1239,8 @@ pub unsafe extern "C" fn qcms_profile_precache_output_transform(mut profile: *mu
 #[no_mangle]
 pub unsafe extern "C" fn qcms_transform_precacheLUT_float(
     mut transform: *mut qcms_transform,
-    mut in_0: *mut qcms_profile,
-    mut out: *mut qcms_profile,
+    mut in_0: &qcms_profile,
+    mut out: &qcms_profile,
     mut samples: i32,
     mut in_type: qcms_data_type,
 ) -> *mut qcms_transform {
@@ -1304,9 +1310,9 @@ pub unsafe extern "C" fn qcms_transform_precacheLUT_float(
 }
 #[no_mangle]
 pub unsafe extern "C" fn qcms_transform_create(
-    mut in_0: *mut qcms_profile,
+    mut in_0: &qcms_profile,
     mut in_type: qcms_data_type,
-    mut out: *mut qcms_profile,
+    mut out: &qcms_profile,
     mut out_type: qcms_data_type,
     mut intent: qcms_intent,
 ) -> *mut qcms_transform {
@@ -1373,24 +1379,15 @@ pub unsafe extern "C" fn qcms_transform_create(
             qcms_transform_release(transform);
             return 0 as *mut qcms_transform;
         }
-        build_output_lut(
-            (*out).redTRC.as_deref().unwrap(),
-            &mut (*transform).output_gamma_lut_r,
-            &mut (*transform).output_gamma_lut_r_length,
-        );
-        build_output_lut(
-            (*out).greenTRC.as_deref().unwrap(),
-            &mut (*transform).output_gamma_lut_g,
-            &mut (*transform).output_gamma_lut_g_length,
-        );
-        build_output_lut(
-            (*out).blueTRC.as_deref().unwrap(),
-            &mut (*transform).output_gamma_lut_b,
-            &mut (*transform).output_gamma_lut_b_length,
-        );
-        if (*transform).output_gamma_lut_r.is_null()
-            || (*transform).output_gamma_lut_g.is_null()
-            || (*transform).output_gamma_lut_b.is_null()
+        (*transform).output_gamma_lut_r = Some(build_output_lut((*out).redTRC.as_deref().unwrap()));
+        (*transform).output_gamma_lut_g =
+            Some(build_output_lut((*out).greenTRC.as_deref().unwrap()));
+        (*transform).output_gamma_lut_b =
+            Some(build_output_lut((*out).blueTRC.as_deref().unwrap()));
+
+        if (*transform).output_gamma_lut_r.is_none()
+            || (*transform).output_gamma_lut_g.is_none()
+            || (*transform).output_gamma_lut_b.is_none()
         {
             qcms_transform_release(transform);
             return 0 as *mut qcms_transform;
@@ -1454,9 +1451,9 @@ pub unsafe extern "C" fn qcms_transform_create(
         (*transform).input_gamma_table_r = build_input_gamma_table((*in_0).redTRC.as_deref());
         (*transform).input_gamma_table_g = build_input_gamma_table((*in_0).greenTRC.as_deref());
         (*transform).input_gamma_table_b = build_input_gamma_table((*in_0).blueTRC.as_deref());
-        if (*transform).input_gamma_table_r.is_null()
-            || (*transform).input_gamma_table_g.is_null()
-            || (*transform).input_gamma_table_b.is_null()
+        if (*transform).input_gamma_table_r.is_none()
+            || (*transform).input_gamma_table_g.is_none()
+            || (*transform).input_gamma_table_b.is_none()
         {
             qcms_transform_release(transform);
             return 0 as *mut qcms_transform;
@@ -1497,7 +1494,7 @@ pub unsafe extern "C" fn qcms_transform_create(
         (*transform).matrix[2][2] = result_0.m[2][2]
     } else if (*in_0).color_space == 0x47524159 {
         (*transform).input_gamma_table_gray = build_input_gamma_table((*in_0).grayTRC.as_deref());
-        if (*transform).input_gamma_table_gray.is_null() {
+        if (*transform).input_gamma_table_gray.is_none() {
             qcms_transform_release(transform);
             return 0 as *mut qcms_transform;
         }

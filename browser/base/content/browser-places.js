@@ -81,7 +81,7 @@ var StarUI = {
       case "popuphidden": {
         clearTimeout(this._autoCloseTimer);
         if (aEvent.originalTarget == this.panel) {
-          let selectedFolderGuid = gEditItemOverlay.selectedFolderGuid;
+          let { selectedFolderGuid, didChangeFolder } = gEditItemOverlay;
           gEditItemOverlay.uninitPanel(true);
 
           this._anchorElement.removeAttribute("open");
@@ -111,9 +111,10 @@ var StarUI = {
           }
 
           if (!removeBookmarksOnPopupHidden) {
-            this._storeRecentlyUsedFolder(selectedFolderGuid).catch(
-              console.error
-            );
+            this._storeRecentlyUsedFolder(
+              selectedFolderGuid,
+              didChangeFolder
+            ).catch(console.error);
           }
         }
         break;
@@ -382,12 +383,21 @@ var StarUI = {
     this._batching = false;
   },
 
-  async _storeRecentlyUsedFolder(selectedFolderGuid) {
-    // These are displayed by default, so don't save the folder for them.
-    if (
-      !selectedFolderGuid ||
-      PlacesUtils.bookmarks.userContentRoots.includes(selectedFolderGuid)
-    ) {
+  async _storeRecentlyUsedFolder(selectedFolderGuid, didChangeFolder) {
+    if (!selectedFolderGuid) {
+      return;
+    }
+
+    // If we're changing where a bookmark gets saved, persist that location.
+    if (didChangeFolder) {
+      Services.prefs.setCharPref(
+        "browser.bookmarks.defaultLocation",
+        selectedFolderGuid
+      );
+    }
+
+    // Don't store folders that are always displayed in "Recent Folders".
+    if (PlacesUtils.bookmarks.userContentRoots.includes(selectedFolderGuid)) {
       return;
     }
 
@@ -468,7 +478,9 @@ var PlacesCommandHook = {
     let isNewBookmark = !info;
     let showEditUI = !isNewBookmark || StarUI.showForNewBookmarks;
     if (isNewBookmark) {
-      let parentGuid = PlacesUtils.bookmarks.unfiledGuid;
+      // This is async because we have to validate the guid
+      // coming from prefs.
+      let parentGuid = await PlacesUIUtils.defaultParentGuid;
       info = { url, parentGuid };
       // Bug 1148838 - Make this code work for full page plugins.
       let charset = null;
@@ -540,9 +552,11 @@ var PlacesCommandHook = {
       return;
     }
 
+    let parentGuid = await PlacesUIUtils.defaultParentGuid;
+    let parentId = await PlacesUtils.promiseItemId(parentGuid);
     let defaultInsertionPoint = new PlacesInsertionPoint({
-      parentId: PlacesUtils.bookmarksMenuFolderId,
-      parentGuid: PlacesUtils.bookmarks.menuGuid,
+      parentId,
+      parentGuid,
     });
     PlacesUIUtils.showBookmarkDialog(
       {
@@ -1574,6 +1588,12 @@ var BookmarkingUI = {
     menu.setAttribute("id", "toggle_" + toolbar.id);
     menu.setAttribute("accesskey", toolbar.getAttribute("accesskey"));
     menu.setAttribute("toolbarId", toolbar.id);
+
+    // Used by the Places context menu in the Bookmarks Toolbar
+    // when nothing is selected
+    menu.setAttribute("selectiontype", "none");
+
+    MozXULElement.insertFTLIfNeeded("browser/toolbarContextMenu.ftl");
     let menuItems = [
       [
         showOnNewTabMenuItem,
@@ -1593,7 +1613,7 @@ var BookmarkingUI = {
     ];
     menuItems.map(([menuItem, l10nId, visibilityEnum]) => {
       document.l10n.setAttributes(menuItem, l10nId);
-      menuItem.setAttribute("type", "checkbox");
+      menuItem.setAttribute("type", "radio");
       // The persisted state of the PersonalToolbar is stored in
       // "browser.toolbars.bookmarks.visibility".
       menuItem.setAttribute(
@@ -1606,27 +1626,34 @@ var BookmarkingUI = {
       menuItem.dataset.visibilityEnum = visibilityEnum;
       menuItem.addEventListener("command", onViewToolbarCommand);
     });
+    let menuItemForNextStateFromKbShortcut =
+      gBookmarksToolbarVisibility == "never"
+        ? alwaysShowMenuItem
+        : alwaysHideMenuItem;
+    menuItemForNextStateFromKbShortcut.setAttribute(
+      "key",
+      "viewBookmarksToolbarKb"
+    );
 
     return menu;
   },
 
   bookmarksToolbarHasVisibleChildren() {
-    let bookmarksToolbarWidgets = CustomizableUI.getWidgetsInArea(
-      CustomizableUI.AREA_BOOKMARKS
+    let bookmarksToolbarItemsPlacement = CustomizableUI.getPlacementOfWidget(
+      "personal-bookmarks"
     );
 
-    const BOOKMARKS_TOOLBAR_ITEMS_ID = "personal-bookmarks";
     if (
-      bookmarksToolbarWidgets.find(w => w.id == BOOKMARKS_TOOLBAR_ITEMS_ID) &&
+      bookmarksToolbarItemsPlacement.area == CustomizableUI.AREA_BOOKMARKS &&
       PlacesUtils.getChildCountForFolder(PlacesUtils.bookmarks.toolbarGuid)
     ) {
       return true;
     }
 
-    // The bookmarks items may not have any children, but if there are
-    // other widgets present then treat them as visible.
-    return bookmarksToolbarWidgets.some(
-      w => w.id != BOOKMARKS_TOOLBAR_ITEMS_ID
+    let bookmarksToolbar = document.getElementById("PersonalToolbar");
+    return !!bookmarksToolbar.querySelector(
+      `#PersonalToolbar > toolbarbutton:not([hidden]),
+       #PersonalToolbar > toolbaritem:not([hidden]):not(#personal-bookmarks)`
     );
   },
 
@@ -1688,6 +1715,24 @@ var BookmarkingUI = {
     if (aWindow == window) {
       this._uninitView();
       this._isCustomizing = true;
+
+      if (
+        !Services.prefs.getBoolPref("browser.toolbars.bookmarks.2h2020", false)
+      ) {
+        return;
+      }
+
+      let isVisible =
+        Services.prefs.getCharPref(
+          "browser.toolbars.bookmarks.visibility",
+          "newtab"
+        ) != "never";
+      // Temporarily show the bookmarks toolbar in Customize mode if
+      // the toolbar isn't set to Never. We don't have to worry about
+      // hiding when leaving customize mode since the toolbar will
+      // hide itself on location change.
+      let toolbar = document.getElementById("PersonalToolbar");
+      setToolbarVisibility(toolbar, isVisible, false);
     }
   },
 
@@ -2170,6 +2215,10 @@ var BookmarkingUI = {
           }
           break;
       }
+
+      if (ev.parentGuid === PlacesUtils.bookmarks.unfiledGuid) {
+        this.maybeShowOtherBookmarksFolder();
+      }
     }
   },
 
@@ -2207,7 +2256,25 @@ var BookmarkingUI = {
   onEndUpdateBatch() {},
   onBeforeItemRemoved() {},
   onItemVisited() {},
-  onItemMoved() {},
+  onItemMoved(
+    aItemId,
+    aProperty,
+    aIsAnnotationProperty,
+    aNewValue,
+    aLastModified,
+    aItemType,
+    aGuid,
+    oldParentGuid,
+    newParentGuid
+  ) {
+    let hasMovedToOrOutOfOtherBookmarks =
+      newParentGuid === PlacesUtils.bookmarks.unfiledGuid ||
+      oldParentGuid === PlacesUtils.bookmarks.unfiledGuid;
+
+    if (hasMovedToOrOutOfOtherBookmarks) {
+      this.maybeShowOtherBookmarksFolder();
+    }
+  },
 
   onWidgetUnderflow(aNode, aContainer) {
     let win = aNode.ownerGlobal;
@@ -2218,6 +2285,38 @@ var BookmarkingUI = {
     // The view gets broken by being removed and reinserted. Uninit
     // here so popupshowing will generate a new one:
     this._uninitView();
+  },
+
+  async maybeShowOtherBookmarksFolder() {
+    // Only show the "Other Bookmarks" folder in the toolbar if pref is enabled.
+    let featureEnabled = Services.prefs.getBoolPref(
+      "browser.toolbars.bookmarks.2h2020",
+      false
+    );
+
+    if (!featureEnabled) {
+      return;
+    }
+
+    let unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    let numberOfBookmarks = PlacesUtils.getChildCountForFolder(unfiledGuid);
+    let otherBookmarks = document.getElementById("OtherBookmarks");
+    let placement = CustomizableUI.getPlacementOfWidget("personal-bookmarks");
+
+    if (
+      numberOfBookmarks > 0 &&
+      placement.area == CustomizableUI.AREA_BOOKMARKS
+    ) {
+      let otherBookmarksPopup = document.getElementById("OtherBookmarksPopup");
+      let result = PlacesUtils.getFolderContents(unfiledGuid);
+      let node = result.root;
+      otherBookmarksPopup._placesNode = PlacesUtils.asContainer(node);
+      otherBookmarks._placesNode = PlacesUtils.asContainer(node);
+
+      otherBookmarks.hidden = false;
+    } else {
+      otherBookmarks.hidden = true;
+    }
   },
 
   QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),

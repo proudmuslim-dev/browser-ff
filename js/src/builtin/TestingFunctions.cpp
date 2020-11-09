@@ -63,6 +63,7 @@
 #include "js/experimental/CodeCoverage.h"  // js::GetCodeCoverageSummary
 #include "js/experimental/TypedData.h"     // JS_GetObjectAsUint8Array
 #include "js/friend/DumpFunctions.h"  // js::Dump{Backtrace,Heap,Object}, JS::FormatStackDump, js::IgnoreNurseryObjects
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/WindowProxy.h"    // js::ToWindowProxyIfWindow
 #include "js/HashTable.h"
 #include "js/LocaleSensitive.h"
@@ -1091,6 +1092,12 @@ struct DisasmBuffer {
   bool oom;
   explicit DisasmBuffer(JSContext* cx) : builder(cx), oom(false) {}
 };
+
+static bool HasDisassembler(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setBoolean(jit::HasDisassembler());
+  return true;
+}
 
 MOZ_THREAD_LOCAL(DisasmBuffer*) disasmBuf;
 
@@ -5032,7 +5039,7 @@ static bool EvalStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
   }
 
   /* Deserialize the stencil from XDR. */
-  JS::TranscodeRange xdrRange(src->dataPointer(), src->byteLength());
+  JS::TranscodeRange xdrRange(src->dataPointer(), src->byteLength().get());
   bool succeeded = false;
   if (!compilationInfos.get().deserializeStencils(cx, xdrRange, &succeeded)) {
     return false;
@@ -6444,6 +6451,10 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gcparam", GCParameter, 2, 0,
 "gcparam(name [, value])",
 "  Wrapper for JS_[GS]etGCParameter. The name is one of:" GC_PARAMETER_ARGS_LIST),
+
+    JS_FN_HELP("hasDisassembler", HasDisassembler, 0, 0,
+"hasDisassembler()",
+"  Return true if a disassembler is present (for disnative and wasmDis)."),
 
     JS_FN_HELP("disnative", DisassembleNative, 2, 0,
 "disnative(fun,[path])",

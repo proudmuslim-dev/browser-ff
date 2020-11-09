@@ -21,7 +21,9 @@
 #include <algorithm>
 #include "mozilla/ipc/BackgroundChild.h"
 #include "GeckoProfiler.h"
+#include "js/experimental/CTypes.h"  // JS::CTypesActivityType, JS::SetCTypesActivityCallback
 #include "jsfriendapi.h"
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/ContextOptions.h"
 #include "js/LocaleSensitive.h"
 #include "mozilla/ArrayUtils.h"
@@ -568,24 +570,24 @@ bool ContentSecurityPolicyAllows(JSContext* aCx, JS::HandleString aCode) {
   return worker->IsEvalAllowed();
 }
 
-void CTypesActivityCallback(JSContext* aCx, js::CTypesActivityType aType) {
+void CTypesActivityCallback(JSContext* aCx, JS::CTypesActivityType aType) {
   WorkerPrivate* worker = GetWorkerPrivateFromContext(aCx);
   worker->AssertIsOnWorkerThread();
 
   switch (aType) {
-    case js::CTYPES_CALL_BEGIN:
+    case JS::CTypesActivityType::BeginCall:
       worker->BeginCTypesCall();
       break;
 
-    case js::CTYPES_CALL_END:
+    case JS::CTypesActivityType::EndCall:
       worker->EndCTypesCall();
       break;
 
-    case js::CTYPES_CALLBACK_BEGIN:
+    case JS::CTypesActivityType::BeginCallback:
       worker->BeginCTypesCallback();
       break;
 
-    case js::CTYPES_CALLBACK_END:
+    case JS::CTypesActivityType::EndCallback:
       worker->EndCTypesCallback();
       break;
 
@@ -731,7 +733,7 @@ bool InitJSContextForWorker(WorkerPrivate* aWorkerPrivate,
 
   JS_AddInterruptCallback(aWorkerCx, InterruptCallback);
 
-  js::SetCTypesActivityCallback(aWorkerCx, CTypesActivityCallback);
+  JS::SetCTypesActivityCallback(aWorkerCx, CTypesActivityCallback);
 
 #ifdef JS_GC_ZEAL
   JS_SetGCZeal(aWorkerCx, settings.gcZeal, settings.gcZealFrequency);

@@ -25,9 +25,8 @@
 #include <string.h>    // for strlen, strcmp
 #include <utility>     // for std::move
 
-#include "jsapi.h"        // for CallArgs, CallArgsFromVp
-#include "jsfriendapi.h"  // for GetErrorMessage
-#include "jstypes.h"      // for JS_PUBLIC_API
+#include "jsapi.h"    // for CallArgs, CallArgsFromVp
+#include "jstypes.h"  // for JS_PUBLIC_API
 
 #include "builtin/Array.h"               // for NewDenseFullyAllocatedArray
 #include "debugger/DebugAPI.h"           // for ResumeMode, DebugAPI
@@ -62,6 +61,7 @@
 #include "jit/RematerializedFrame.h"  // for RematerializedFrame
 #include "js/Conversions.h"           // for ToBoolean, ToUint32
 #include "js/Debug.h"                 // for Builder::Object, Builder
+#include "js/friend/ErrorMessages.h"  // for GetErrorMessage, JSMSG_*
 #include "js/GCAPI.h"                 // for GarbageCollectionEvent
 #include "js/HeapAPI.h"               // for ExposeObjectToActiveJS
 #include "js/Promise.h"               // for AutoDebuggerJobQueueInterruption
@@ -6029,7 +6029,8 @@ bool Debugger::isCompilableUnit(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   LifoAllocScope allocScope(&cx->tempLifoAlloc());
-  frontend::CompilationState compilationState(cx, allocScope, options);
+  frontend::CompilationState compilationState(cx, allocScope, options,
+                                              compilationInfo.get().stencil);
 
   JS::AutoSuppressWarningReporter suppressWarnings(cx);
   frontend::Parser<frontend::FullParseHandler, char16_t> parser(

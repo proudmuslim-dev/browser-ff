@@ -70,8 +70,14 @@ class ParagraphBoundaryRule : public PivotRule {
   virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override {
     MOZ_ASSERT(aAccOrProxy.IsAccessible());
     Accessible* acc = aAccOrProxy.AsAccessible();
-    uint16_t result = nsIAccessibleTraversalRule::FILTER_IGNORE;
+    if (acc->IsOuterDoc()) {
+      // The child document might be remote and we can't (and don't want to)
+      // handle remote documents. Also, iframes are inline anyway and thus
+      // can't be paragraph boundaries. Therefore, skip this unconditionally.
+      return nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
+    }
 
+    uint16_t result = nsIAccessibleTraversalRule::FILTER_IGNORE;
     if (mSkipAnchorSubtree && acc == mAnchor) {
       result |= nsIAccessibleTraversalRule::FILTER_IGNORE_SUBTREE;
     }
@@ -186,7 +192,12 @@ uint64_t HyperTextAccessible::NativeState() const {
     states |= states::READONLY;
   }
 
-  if (HasChildren()) states |= states::SELECTABLE_TEXT;
+  nsIFrame* frame = GetFrame();
+  if ((states & states::EDITABLE) || (frame && frame->IsSelectable(nullptr))) {
+    // If the accessible is editable the layout selectable state only disables
+    // mouse selection, but keyboard (shift+arrow) selection is still possible.
+    states |= states::SELECTABLE_TEXT;
+  }
 
   return states;
 }
@@ -813,14 +824,15 @@ uint32_t HyperTextAccessible::FindLineBoundary(
       // layout could not find the offset for us. This can happen with certain
       // inline-block elements.
       if (nextLineBeginOffset <= aOffset) {
-        // Walk back from the tmpOffset to the offset we started from,
+        // Walk forward from the offset we started from up to tmpOffset,
         // stopping after a line end character.
-        nextLineBeginOffset = tmpOffset;
-        while (nextLineBeginOffset >= aOffset &&
-               !IsLineEndCharAt(nextLineBeginOffset - 1)) {
-          nextLineBeginOffset--;
+        nextLineBeginOffset = aOffset;
+        while (nextLineBeginOffset < tmpOffset) {
+          if (IsLineEndCharAt(nextLineBeginOffset)) {
+            return nextLineBeginOffset + 1;
+          }
+          nextLineBeginOffset++;
         }
-        return nextLineBeginOffset;
       }
 
       return nextLineBeginOffset;

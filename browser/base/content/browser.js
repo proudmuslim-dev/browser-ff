@@ -1674,6 +1674,7 @@ var gBrowserInit = {
   delayedStartupFinished: false,
   idleTasksFinishedPromise: null,
   idleTaskPromiseResolve: null,
+  domContentLoaded: false,
 
   _tabToAdopt: undefined,
 
@@ -1830,6 +1831,8 @@ var gBrowserInit = {
     this._setInitialFocus();
 
     updateFxaToolbarMenu(gFxaToolbarEnabled, true);
+
+    this.domContentLoaded = true;
   },
 
   onLoad() {
@@ -5373,6 +5376,8 @@ var XULBrowserWindow = {
     // Do not update urlbar if there was a subframe navigation
 
     if (aWebProgress.isTopLevel) {
+      let isSameDocument =
+        aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT;
       if (
         (location == "about:blank" &&
           BrowserUtils.checkEmptyPageOrigin(gBrowser.selectedBrowser)) ||
@@ -5392,7 +5397,8 @@ var XULBrowserWindow = {
       gURLBar.setURI(aLocationURI, aIsSimulated);
 
       BookmarkingUI.onLocationChange();
-      if (gBookmarksToolbar2h2020) {
+      // If we've actually changed document, update the toolbar visibility.
+      if (gBookmarksToolbar2h2020 && !isSameDocument) {
         let bookmarksToolbar = gNavToolbox.querySelector("#PersonalToolbar");
         setToolbarVisibility(
           bookmarksToolbar,
@@ -6617,8 +6623,21 @@ function setToolbarVisibility(
         isVisible = false;
         break;
       case "newtab":
+        let { currentURI } = gBrowser;
+        if (!gBrowserInit.domContentLoaded) {
+          let uriToLoad = gBrowserInit.uriToLoadPromise;
+          if (uriToLoad) {
+            if (Array.isArray(uriToLoad)) {
+              // We only care about the first tab being loaded
+              uriToLoad = uriToLoad[0];
+            }
+            try {
+              currentURI = Services.io.newURI(uriToLoad);
+            } catch (ex) {}
+          }
+        }
         isVisible = BookmarkingUI.isOnNewTabPage({
-          currentURI: gBrowser.currentURI,
+          currentURI,
           isNullPrincipal: gBrowser.contentPrincipal.isNullPrincipal,
         });
         // If there is nothing visible in the toolbar, then don't show
@@ -8179,7 +8198,10 @@ var MailIntegration = {
       "@mozilla.org/uriloader/external-protocol-service;1"
     ].getService(Ci.nsIExternalProtocolService);
     if (extProtocolSvc) {
-      extProtocolSvc.loadURI(aURL);
+      extProtocolSvc.loadURI(
+        aURL,
+        Services.scriptSecurityManager.getSystemPrincipal()
+      );
     }
   },
 };
@@ -9336,16 +9358,19 @@ TabModalPromptBox.prototype = {
       /* Ignore exceptions for host-less URIs */
     }
     if (hostForAllowFocusCheckbox) {
-      let allowFocusRow = document.createXULElement("row");
-      allowFocusCheckbox = document.createXULElement("checkbox");
-      let spacer = document.createXULElement("spacer");
+      let allowFocusRow = document.createElement("div");
+
+      let spacer = document.createElement("div");
       allowFocusRow.appendChild(spacer);
+
+      allowFocusCheckbox = document.createXULElement("checkbox");
       let label = gTabBrowserBundle.formatStringFromName(
         "tabs.allowTabFocusByPromptForSite",
         [hostForAllowFocusCheckbox]
       );
       allowFocusCheckbox.setAttribute("label", label);
       allowFocusRow.appendChild(allowFocusCheckbox);
+
       newPrompt.ui.rows.append(allowFocusRow);
     }
 

@@ -936,9 +936,13 @@ impl SwCompositor {
                                 self.gl.lock_texture(info.textures[1]),
                                 self.gl.lock_texture(info.textures[2]),
                             ) {
-                                (Some(y_texture), Some(u_texture), Some(v_texture)) => {
-                                    SwCompositeSource::YUV(y_texture, u_texture, v_texture, info.color_space, info.color_depth)
-                                }
+                                (Some(y_texture), Some(u_texture), Some(v_texture)) => SwCompositeSource::YUV(
+                                    y_texture,
+                                    u_texture,
+                                    v_texture,
+                                    info.color_space,
+                                    info.color_depth,
+                                ),
                                 _ => return,
                             },
                             _ => panic!("unsupported number of YUV planes: {}", info.yuv_planes),
@@ -1451,7 +1455,7 @@ impl Compositor for SwCompositor {
     /// frame will not have overlap dependencies assigned and so must instead
     /// be added to the late_surfaces queue to be processed at the end of the
     /// frame.
-    fn start_compositing(&mut self) {
+    fn start_compositing(&mut self, _dirty_rects: &[DeviceIntRect]) {
         if let Some(ref composite_thread) = self.composite_thread {
             composite_thread.start_compositing();
             // Issue any initial composite jobs for the SwComposite thread.

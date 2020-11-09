@@ -10,7 +10,7 @@ replace-with = "vendored-sources"
 [source."https://github.com/mozilla/neqo"]
 git = "https://github.com/mozilla/neqo"
 replace-with = "vendored-sources"
-tag = "v0.4.13"
+tag = "v0.4.14"
 
 [source."https://github.com/mozilla/mp4parse-rust"]
 git = "https://github.com/mozilla/mp4parse-rust"
@@ -20,7 +20,7 @@ rev = "f7c35a30ff25521bebe64c19d3f306569ecb5385"
 [source."https://github.com/mozilla/application-services"]
 git = "https://github.com/mozilla/application-services"
 replace-with = "vendored-sources"
-rev = "641353a8648602ce17d23c89b88e2a22d108fb03"
+rev = "8a576fbe79199fa8664f64285524017f74ebcc5f"
 
 [source."https://github.com/mozilla-spidermonkey/jsparagus"]
 git = "https://github.com/mozilla-spidermonkey/jsparagus"
@@ -28,7 +28,7 @@ replace-with = "vendored-sources"
 rev = "1dc60327164a3f64f87180147b1f3a2a9cc74276"
 
 [source."https://github.com/kvark/spirv_cross"]
-branch = "wgpu3"
+branch = "wgpu4"
 git = "https://github.com/kvark/spirv_cross"
 replace-with = "vendored-sources"
 
@@ -45,12 +45,12 @@ tag = "v0.4.2"
 [source."https://github.com/hsivonen/packed_simd"]
 git = "https://github.com/hsivonen/packed_simd"
 replace-with = "vendored-sources"
-rev = "3541e3818fdc7c2a24f87e3459151a4ce955a67a"
+rev = "0917fe780032a6bbb23d71be545f9c1834128d75"
 
 [source."https://github.com/gfx-rs/naga"]
 git = "https://github.com/gfx-rs/naga"
 replace-with = "vendored-sources"
-rev = "bce6358eb1026c13d2f1c6d365af37afe8869a86"
+rev = "aa35110471ee7915e1f4e1de61ea41f2f32f92c4"
 
 [source."https://github.com/djg/cubeb-pulse-rs"]
 git = "https://github.com/djg/cubeb-pulse-rs"

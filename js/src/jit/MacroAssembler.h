@@ -260,6 +260,11 @@ static inline DynFn DynamicFunction(Sig fun);
 
 enum class CharEncoding { Latin1, TwoByte };
 
+constexpr uint32_t WasmCallerTLSOffsetBeforeCall =
+    wasm::FrameWithTls::callerTLSOffset() + ShadowStackSpace;
+constexpr uint32_t WasmCalleeTLSOffsetBeforeCall =
+    wasm::FrameWithTls::calleeTLSOffset() + ShadowStackSpace;
+
 // The public entrypoint for emitting assembly. Note that a MacroAssembler can
 // use cx->lifoAlloc, so take care not to interleave masm use with other
 // lifoAlloc use if one will be destroyed before the other.
@@ -667,7 +672,12 @@ class MacroAssembler : public MacroAssemblerSpecific {
  private:
   // Reinitialize the variables which have to be cleared before making a call
   // with callWithABI.
-  void setupABICall();
+  template <class ABIArgGeneratorT>
+  void setupABICallHelper();
+
+  // Reinitialize the variables which have to be cleared before making a call
+  // with native abi.
+  void setupNativeABICall();
 
   // Reserve the stack and resolve the arguments move.
   void callWithABIPre(uint32_t* stackAdjust,
@@ -1090,6 +1100,11 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void signDouble(FloatRegister input, FloatRegister output);
   void signDoubleToInt32(FloatRegister input, Register output,
                          FloatRegister temp, Label* fail);
+
+  void copySignDouble(FloatRegister lhs, FloatRegister rhs,
+                      FloatRegister output) PER_SHARED_ARCH;
+  void copySignFloat32(FloatRegister lhs, FloatRegister rhs,
+                       FloatRegister output) DEFINED_ON(x86_shared);
 
   // Returns a random double in range [0, 1) in |dest|. The |rng| register must
   // hold a pointer to a mozilla::non_crypto::XorShift128PlusRNG.
@@ -2757,15 +2772,15 @@ class MacroAssembler : public MacroAssemblerSpecific {
   std::pair<CodeOffset, uint32_t> wasmReserveStackChecked(
       uint32_t amount, wasm::BytecodeOffset trapOffset);
 
-  // Emit a bounds check against the wasm heap limit, jumping to 'label' if
-  // 'cond' holds. If JitOptions.spectreMaskIndex is true, in speculative
-  // executions 'index' is saturated in-place to 'boundsCheckLimit'.
-  void wasmBoundsCheck(Condition cond, Register index,
-                       Register boundsCheckLimit, Label* label)
+  // Emit a bounds check against the wasm heap limit for 32-bit memory, jumping
+  // to 'label' if 'cond' holds. If JitOptions.spectreMaskIndex is true, in
+  // speculative executions 'index' is saturated in-place to 'boundsCheckLimit'.
+  void wasmBoundsCheck32(Condition cond, Register index,
+                         Register boundsCheckLimit, Label* label)
       DEFINED_ON(arm, arm64, mips32, mips64, x86_shared);
 
-  void wasmBoundsCheck(Condition cond, Register index, Address boundsCheckLimit,
-                       Label* label)
+  void wasmBoundsCheck32(Condition cond, Register index,
+                         Address boundsCheckLimit, Label* label)
       DEFINED_ON(arm, arm64, mips32, mips64, x86_shared);
 
   // Each wasm load/store instruction appends its own wasm::Trap::OutOfBounds.
@@ -3540,8 +3555,6 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void guardStringToInt32(Register str, Register output, Register scratch,
                           LiveRegisterSet volatileRegs, Label* fail);
-
-  void loadWasmTlsRegFromFrame(Register dest = WasmTlsReg);
 
   template <typename T>
   void loadTypedOrValue(const T& src, TypedOrValueRegister dest) {
@@ -4335,9 +4348,9 @@ static inline MIRType ToMIRType(ABIArgType argType) {
 // Helper for generatePreBarrier.
 inline DynFn JitMarkFunction(MIRType type);
 
-template <class VecT>
-class ABIArgIter {
-  ABIArgGenerator gen_;
+template <class VecT, class ABIArgGeneratorT>
+class ABIArgIterBase {
+  ABIArgGeneratorT gen_;
   const VecT& types_;
   unsigned i_;
 
@@ -4346,7 +4359,9 @@ class ABIArgIter {
   }
 
  public:
-  explicit ABIArgIter(const VecT& types) : types_(types), i_(0) { settle(); }
+  explicit ABIArgIterBase(const VecT& types) : types_(types), i_(0) {
+    settle();
+  }
   void operator++(int) {
     MOZ_ASSERT(!done());
     i_++;
@@ -4376,7 +4391,35 @@ class ABIArgIter {
   }
 };
 
+// This is not an alias because we want to allow class template argument
+// deduction.
+template <class VecT>
+class ABIArgIter : public ABIArgIterBase<VecT, ABIArgGenerator> {
+ public:
+  explicit ABIArgIter(const VecT& types)
+      : ABIArgIterBase<VecT, ABIArgGenerator>(types) {}
+};
+
+class WasmABIArgGenerator : public ABIArgGenerator {
+ public:
+  WasmABIArgGenerator() {
+    increaseStackOffset(wasm::FrameWithTls::sizeWithoutFrame());
+  }
+};
+
+template <class VecT>
+class WasmABIArgIter : public ABIArgIterBase<VecT, WasmABIArgGenerator> {
+ public:
+  explicit WasmABIArgIter(const VecT& types)
+      : ABIArgIterBase<VecT, WasmABIArgGenerator>(types) {}
+};
 }  // namespace jit
+
+namespace wasm {
+const TlsData* ExtractCalleeTlsFromFrameWithTls(const Frame* fp);
+const TlsData* ExtractCallerTlsFromFrameWithTls(const Frame* fp);
+}  // namespace wasm
+
 }  // namespace js
 
 #endif /* jit_MacroAssembler_h */

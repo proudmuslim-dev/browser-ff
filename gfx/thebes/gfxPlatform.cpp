@@ -787,6 +787,8 @@ WebRenderMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
         helper.ReportTexture(aReport.render_target_textures, "render-targets");
         helper.ReportTexture(aReport.texture_cache_textures, "texture-cache");
         helper.ReportTexture(aReport.depth_target_textures, "depth-targets");
+        helper.ReportTexture(aReport.texture_upload_pbos,
+                             "texture-upload-pbos");
         helper.ReportTexture(aReport.swap_chain, "swap-chains");
 
         FinishAsyncMemoryReport();
@@ -2919,13 +2921,6 @@ void gfxPlatform::InitOMTPConfig() {
                       "OMTP is not supported when using cairo",
                       "FEATURE_FAILURE_COMP_PREF"_ns);
   }
-
-#ifdef XP_MACOSX
-  if (!nsCocoaFeatures::OnYosemiteOrLater()) {
-    omtp.ForceDisable(FeatureStatus::Blocked, "OMTP blocked before OSX 10.10",
-                      "FEATURE_FAILURE_OMTP_OSX_MAVERICKS"_ns);
-  }
-#endif
 
   if (InSafeMode()) {
     omtp.ForceDisable(FeatureStatus::Blocked, "OMTP blocked by safe-mode",

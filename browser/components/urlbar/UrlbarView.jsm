@@ -356,13 +356,19 @@ class UrlbarView {
     // result was announced to the user as they typed. We don't set
     // aria-activedescendant so the user doesn't think they have to press
     // Enter to enter search mode. See bug 1647929.
-    function isSkippableTabToSearchAnnounce(selectedElt) {
-      return (
+    const isSkippableTabToSearchAnnounce = selectedElt => {
+      let skipAnnouncement =
         selectedElt?.result?.providerName == "TabToSearch" &&
+        !this._announceTabToSearchOnSelection &&
         userPressedTab &&
-        UrlbarPrefs.get("accessibility.tabToSearch.announceResults")
-      );
-    }
+        UrlbarPrefs.get("accessibility.tabToSearch.announceResults");
+      if (skipAnnouncement) {
+        // Once we skip setting aria-activedescendant once, we should not skip
+        // it again if the user returns to that result.
+        this._announceTabToSearchOnSelection = true;
+      }
+      return skipAnnouncement;
+    };
 
     // Freeze results as the user is interacting with them, unless we are
     // deferring events while waiting for critical results.
@@ -672,6 +678,9 @@ class UrlbarView {
         args: { engine },
       });
       this._previousTabToSearchEngine = engine;
+      // Do not set aria-activedescendant when the user tabs to the result
+      // because we already announced it.
+      this._announceTabToSearchOnSelection = false;
     }
 
     // If we update the selected element, a new unique ID is generated for it.
@@ -1403,7 +1412,10 @@ class UrlbarView {
         UrlbarUtils.ICON.HISTORY) ||
       iconUrlOverride ||
       result.payload.icon ||
-      UrlbarUtils.ICON.SEARCH_GLASS
+      ((result.type == UrlbarUtils.RESULT_TYPE.SEARCH ||
+        result.type == UrlbarUtils.RESULT_TYPE.KEYWORD) &&
+        UrlbarUtils.ICON.SEARCH_GLASS) ||
+      UrlbarUtils.ICON.DEFAULT
     );
   }
 
@@ -2037,7 +2049,11 @@ class UrlbarView {
 
       // Update result favicons.
       let iconOverride = source?.icon || engine?.iconURI?.spec;
-      if (!iconOverride && result.type == UrlbarUtils.RESULT_TYPE.URL) {
+      if (
+        !iconOverride &&
+        (source || engine) &&
+        result.type == UrlbarUtils.RESULT_TYPE.URL
+      ) {
         // For one-offs without an icon, do not allow restyled URL results to
         // use their own icons.
         iconOverride = UrlbarUtils.ICON.SEARCH_GLASS;

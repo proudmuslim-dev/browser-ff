@@ -47,8 +47,9 @@
 #include "frontend/ParseNodeVerify.h"
 #include "frontend/TokenStream.h"
 #include "irregexp/RegExpAPI.h"
-#include "js/RegExpFlags.h"     // JS::RegExpFlags
-#include "util/StringBuffer.h"  // StringBuffer
+#include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
+#include "js/RegExpFlags.h"           // JS::RegExpFlags
+#include "util/StringBuffer.h"        // StringBuffer
 #include "vm/BigIntType.h"
 #include "vm/BytecodeUtil.h"
 #include "vm/FunctionFlags.h"          // js::FunctionFlags
@@ -205,8 +206,7 @@ GeneralParser<ParseHandler, Unit>::GeneralParser(
     BaseScript* lazyOuterFunction)
     : Base(cx, options, foldConstants, compilationInfo, compilationState,
            syntaxParser, lazyOuterFunction),
-      tokenStream(cx, &compilationInfo.stencil.parserAtoms, options, units,
-                  length) {}
+      tokenStream(cx, &compilationState.parserAtoms, options, units, length) {}
 
 template <typename Unit>
 void Parser<SyntaxParseHandler, Unit>::setAwaitHandling(
@@ -280,8 +280,8 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
    * function.
    */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
-      cx_, extent, compilationInfo_, compilationState_, inheritedDirectives,
-      generatorKind, asyncKind, explicitName, flags, index, isTopLevel);
+      cx_, extent, compilationInfo_, inheritedDirectives, generatorKind,
+      asyncKind, explicitName, flags, index, isTopLevel);
   if (!funbox) {
     ReportOutOfMemory(cx_);
     return nullptr;
@@ -384,8 +384,8 @@ typename ParseHandler::ListNodeType GeneralParser<ParseHandler, Unit>::parse() {
     // Don't constant-fold inside "use asm" code, as this could create a parse
     // tree that doesn't type-check as asm.js.
     if (!pc_->useAsmOrInsideUseAsm()) {
-      if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                         &node, &handler_)) {
+      if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                         &handler_)) {
         return null();
       }
     }
@@ -842,7 +842,7 @@ bool PerHandlerParser<ParseHandler>::
       // TODO-Stencil
       //   After closed-over-bindings are snapshotted in the handler,
       //   remove this.
-      auto mbNameId = compilationInfo_.stencil.parserAtoms.internJSAtom(
+      auto mbNameId = this->compilationState_.parserAtoms.internJSAtom(
           cx_, this->getCompilationInfo(), name);
       if (mbNameId.isErr()) {
         return false;
@@ -867,8 +867,8 @@ bool PerHandlerParser<ParseHandler>::
 
   uint32_t slotCount = 0;
   for (BindingIter bi = scope.bindings(pc_); bi; bi++) {
+    bool closedOver = false;
     if (UsedNamePtr p = usedNames_.lookup(bi.name())) {
-      bool closedOver;
       p->value().noteBoundInScope(scriptId, scopeId, &closedOver);
       if (closedOver) {
         bi.setClosedOver();
@@ -879,7 +879,11 @@ bool PerHandlerParser<ParseHandler>::
             return false;
           }
         }
-      } else if constexpr (!isSyntaxParser) {
+      }
+    }
+
+    if constexpr (!isSyntaxParser) {
+      if (!closedOver) {
         slotCount++;
       }
     }
@@ -1062,7 +1066,7 @@ Maybe<ParserGlobalScopeData*> NewGlobalScopeData(JSContext* cx,
 
 Maybe<ParserGlobalScopeData*> ParserBase::newGlobalScopeData(
     ParseContext::Scope& scope) {
-  return NewGlobalScopeData(cx_, scope, alloc_, pc_);
+  return NewGlobalScopeData(cx_, scope, stencilAlloc(), pc_);
 }
 
 Maybe<ParserModuleScopeData*> NewModuleScopeData(JSContext* cx,
@@ -1128,7 +1132,7 @@ Maybe<ParserModuleScopeData*> NewModuleScopeData(JSContext* cx,
 
 Maybe<ParserModuleScopeData*> ParserBase::newModuleScopeData(
     ParseContext::Scope& scope) {
-  return NewModuleScopeData(cx_, scope, alloc_, pc_);
+  return NewModuleScopeData(cx_, scope, stencilAlloc(), pc_);
 }
 
 Maybe<ParserEvalScopeData*> NewEvalScopeData(JSContext* cx,
@@ -1167,7 +1171,7 @@ Maybe<ParserEvalScopeData*> NewEvalScopeData(JSContext* cx,
 
 Maybe<ParserEvalScopeData*> ParserBase::newEvalScopeData(
     ParseContext::Scope& scope) {
-  return NewEvalScopeData(cx_, scope, alloc_, pc_);
+  return NewEvalScopeData(cx_, scope, stencilAlloc(), pc_);
 }
 
 Maybe<ParserFunctionScopeData*> NewFunctionScopeData(JSContext* cx,
@@ -1293,7 +1297,8 @@ bool FunctionScopeHasClosedOverBindings(ParseContext* pc) {
 
 Maybe<ParserFunctionScopeData*> ParserBase::newFunctionScopeData(
     ParseContext::Scope& scope, bool hasParameterExprs) {
-  return NewFunctionScopeData(cx_, scope, hasParameterExprs, alloc_, pc_);
+  return NewFunctionScopeData(cx_, scope, hasParameterExprs, stencilAlloc(),
+                              pc_);
 }
 
 ParserVarScopeData* NewEmptyVarScopeData(JSContext* cx, LifoAlloc& alloc,
@@ -1348,7 +1353,7 @@ static bool VarScopeHasBindings(ParseContext* pc) {
 
 Maybe<ParserVarScopeData*> ParserBase::newVarScopeData(
     ParseContext::Scope& scope) {
-  return NewVarScopeData(cx_, scope, alloc_, pc_);
+  return NewVarScopeData(cx_, scope, stencilAlloc(), pc_);
 }
 
 Maybe<ParserLexicalScopeData*> NewLexicalScopeData(JSContext* cx,
@@ -1424,7 +1429,7 @@ bool LexicalScopeHasClosedOverBindings(ParseContext* pc,
 
 Maybe<ParserLexicalScopeData*> ParserBase::newLexicalScopeData(
     ParseContext::Scope& scope) {
-  return NewLexicalScopeData(cx_, scope, alloc_, pc_);
+  return NewLexicalScopeData(cx_, scope, stencilAlloc(), pc_);
 }
 
 template <>
@@ -1610,8 +1615,8 @@ LexicalScopeNode* Parser<FullParseHandler, Unit>::evalBody(
   // Don't constant-fold inside "use asm" code, as this could create a parse
   // tree that doesn't type-check as asm.js.
   if (!pc_->useAsmOrInsideUseAsm()) {
-    if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                       &node, &handler_)) {
+    if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                       &handler_)) {
       return null();
     }
   }
@@ -1671,8 +1676,8 @@ ListNode* Parser<FullParseHandler, Unit>::globalBody(
   // Don't constant-fold inside "use asm" code, as this could create a parse
   // tree that doesn't type-check as asm.js.
   if (!pc_->useAsmOrInsideUseAsm()) {
-    if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                       &node, &handler_)) {
+    if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                       &handler_)) {
       return null();
     }
   }
@@ -1783,8 +1788,8 @@ ModuleNode* Parser<FullParseHandler, Unit>::moduleBody(
   // Don't constant-fold inside "use asm" code, as this could create a parse
   // tree that doesn't type-check as asm.js.
   if (!pc_->useAsmOrInsideUseAsm()) {
-    if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                       &node, &handler_)) {
+    if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                       &handler_)) {
       return null();
     }
   }
@@ -1976,9 +1981,17 @@ bool PerHandlerParser<SyntaxParseHandler>::finishFunction(
     return false;
   }
 
-  ScriptThingsVector& gcthings = script.gcThings;
-  if (!gcthings.reserve(ngcthings.value())) {
-    js::ReportOutOfMemory(cx_);
+  // If there are no script-things, we can return early without allocating.
+  if (ngcthings.value() == 0) {
+    MOZ_ASSERT(script.gcThings.empty());
+    return true;
+  }
+
+  // Allocate the `stencilThings` array without initializing it yet.
+  mozilla::Span<ScriptThingVariant> stencilThings =
+      NewScriptThingSpanUninitialized(cx_, compilationInfo_.stencil.alloc,
+                                      ngcthings.value());
+  if (stencilThings.empty()) {
     return false;
   }
 
@@ -1989,19 +2002,23 @@ bool PerHandlerParser<SyntaxParseHandler>::finishFunction(
   //
   // See: FullParseHandler::nextLazyInnerFunction(),
   //      FullParseHandler::nextLazyClosedOverBinding()
+  auto cursor = stencilThings.begin();
   for (const FunctionIndex& index : pc_->innerFunctionIndexesForLazy) {
-    gcthings.infallibleAppend(AsVariant(index));
+    void* raw = &(*cursor++);
+    new (raw) ScriptThingVariant(index);
   }
   for (const ScriptAtom& binding : pc_->closedOverBindingsForLazy()) {
+    void* raw = &(*cursor++);
     if (binding) {
       binding->markUsedByStencil();
-      gcthings.infallibleAppend(AsVariant(binding));
+      new (raw) ScriptThingVariant(binding);
     } else {
-      gcthings.infallibleAppend(AsVariant(NullScriptThing()));
+      new (raw) ScriptThingVariant(NullScriptThing());
     }
   }
+  MOZ_ASSERT(cursor == stencilThings.end());
 
-  MOZ_ASSERT(gcthings.length() == ngcthings.value());
+  script.gcThings = stencilThings;
 
   return true;
 }
@@ -2176,8 +2193,8 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneFunction(
   // Don't constant-fold inside "use asm" code, as this could create a parse
   // tree that doesn't type-check as asm.js.
   if (!pc_->useAsmOrInsideUseAsm()) {
-    if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                       &node, &handler_)) {
+    if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                       &handler_)) {
       return null();
     }
   }
@@ -2381,7 +2398,7 @@ const ParserAtom* ParserBase::prefixAccessorName(PropertyType propType,
 
   const ParserAtom* atoms[2] = {prefix, propAtom};
   auto atomsRange = mozilla::Range(atoms, 2);
-  return compilationInfo_.stencil.parserAtoms.concatAtoms(cx_, atomsRange)
+  return this->compilationState_.parserAtoms.concatAtoms(cx_, atomsRange)
       .unwrapOr(nullptr);
 }
 
@@ -2727,7 +2744,9 @@ bool Parser<FullParseHandler, Unit>::skipLazyInnerFunction(
   const ParserAtom* displayAtom = nullptr;
   if (fun->displayAtom()) {
     displayAtom =
-        this->compilationInfo_.lowerJSAtomToParserAtom(cx_, fun->displayAtom());
+        this->compilationState_.parserAtoms
+            .internJSAtom(cx_, this->compilationInfo_, fun->displayAtom())
+            .unwrapOr(nullptr);
     if (!displayAtom) {
       return false;
     }
@@ -3218,7 +3237,9 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneLazyFunction(
   const ParserAtom* displayAtom = nullptr;
   if (fun->displayAtom()) {
     displayAtom =
-        this->compilationInfo_.lowerJSAtomToParserAtom(cx_, fun->displayAtom());
+        this->compilationState_.parserAtoms
+            .internJSAtom(cx_, this->compilationInfo_, fun->displayAtom())
+            .unwrapOr(nullptr);
     if (!displayAtom) {
       return null();
     }
@@ -3277,8 +3298,8 @@ FunctionNode* Parser<FullParseHandler, Unit>::standaloneLazyFunction(
   // Don't constant-fold inside "use asm" code, as this could create a parse
   // tree that doesn't type-check as asm.js.
   if (!pc_->useAsmOrInsideUseAsm()) {
-    if (!FoldConstants(cx_, this->getCompilationInfo().stencil.parserAtoms,
-                       &node, &handler_)) {
+    if (!FoldConstants(cx_, this->compilationState_.parserAtoms, &node,
+                       &handler_)) {
       return null();
     }
   }
@@ -3678,8 +3699,8 @@ bool Parser<FullParseHandler, Unit>::asmJS(ListNodeType list) {
   // function from the beginning. Reparsing is triggered by marking that a
   // new directive has been encountered and returning 'false'.
   bool validated;
-  if (!CompileAsmJS(cx_, this->compilationInfo_.stencil.parserAtoms, *this,
-                    list, &validated)) {
+  if (!CompileAsmJS(cx_, this->compilationState_.parserAtoms, *this, list,
+                    &validated)) {
     return false;
   }
   if (!validated) {
@@ -7366,7 +7387,7 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
           MOZ_CRASH("Invalid private method accessor type");
       }
       const ParserAtom* storedMethodAtom = storedMethodName.finishParserAtom(
-          this->compilationInfo_.stencil.parserAtoms);
+          this->compilationState_.parserAtoms);
       if (!storedMethodAtom) {
         return false;
       }
@@ -10276,14 +10297,17 @@ RegExpLiteral* Parser<FullParseHandler, Unit>::newRegExp() {
     }
   }
 
-  RegExpIndex index(this->getCompilationInfo().stencil.regExpData.length());
-  if (!this->getCompilationInfo().stencil.regExpData.emplaceBack()) {
-    js::ReportOutOfMemory(cx_);
+  const ParserAtom* atom = this->compilationState_.parserAtoms
+                               .internChar16(cx_, chars.begin(), chars.length())
+                               .unwrapOr(nullptr);
+  if (!atom) {
     return nullptr;
   }
+  atom->markUsedByStencil();
 
-  if (!this->getCompilationInfo().stencil.regExpData[index].init(cx_, range,
-                                                                 flags)) {
+  RegExpIndex index(this->getCompilationInfo().stencil.regExpData.length());
+  if (!this->getCompilationInfo().stencil.regExpData.emplaceBack(atom, flags)) {
+    js::ReportOutOfMemory(cx_);
     return nullptr;
   }
 
@@ -10622,7 +10646,7 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::propertyName(
   switch (ltok) {
     case TokenKind::Number: {
       const ParserAtom* numAtom =
-          NumberToParserAtom(cx_, this->compilationInfo_.stencil.parserAtoms,
+          NumberToParserAtom(cx_, this->compilationState_.parserAtoms,
                              anyChars.currentToken().number());
       if (!numAtom) {
         return null();

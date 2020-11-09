@@ -161,12 +161,13 @@ static UniquePtr<base::SharedMemory> LoadFromURI(nsIURI* aURI,
         bytesRead != available) {
       return nullptr;
     }
-    if (!shm->Freeze()) {
-      return nullptr;
-    }
 
     if (!mapped_hyph_is_valid_hyphenator(
             reinterpret_cast<const uint8_t*>(buffer), bytesRead)) {
+      return nullptr;
+    }
+
+    if (!shm->Freeze()) {
       return nullptr;
     }
 
@@ -265,7 +266,8 @@ nsHyphenator::nsHyphenator(nsIURI* aURI, bool aHyphenateCapitalized)
           return;
         }
       } else {
-        UniquePtr<base::SharedMemory> shm = GetHyphDictFromParent(aURI, &length);
+        UniquePtr<base::SharedMemory> shm =
+            GetHyphDictFromParent(aURI, &length);
         if (shm) {
           // We don't need to validate mDict because the parent process
           // will have done so.
