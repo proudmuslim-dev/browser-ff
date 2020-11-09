@@ -35,6 +35,7 @@ BROWSER_CHROME_URL=chrome://browser/content/browser.xhtml
 # "unofficial" branding.
 # For the mozilla-aurora repository, use "aurora".
 MOZ_BRANDING_DIRECTORY=browser/branding/dot
+MOZ_APPUPDATE_HOST=update.dothq.co
 MOZ_OFFICIAL_BRANDING_DIRECTORY=browser/branding/official
 MOZ_APP_ID={ec8030f7-c20a-464f-9b0e-13a3a9e97384}
 
