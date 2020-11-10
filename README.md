@@ -7,7 +7,7 @@
   <h3 align="center">Dot Browser</h3>
 
   <p align="center">
-    Dot Browser is a privacy-conscious web browser, for Windows, macOS and Linux.
+    Dot Browser is a privacy-conscious web browser, developed for Windows, macOS, and Linux.
     <br />
     <a href="https://dothq.co/download"><strong>Download</strong></a>
     <br />
@@ -24,13 +24,13 @@
 
 Dot Browser is proud to be powered by Firefox and Gecko. 
 
-There are a plethora of Chromium based browsers available and introducing competition is unique, healthy and necessary in the browser space. 
+There are a plethora of Chromium based browsers available and introducing competition is unique, healthy, and necessary in the browser space. 
 
-We chose Gecko as it is the best competitor to Chromium, and because it’s developed by Mozilla, who are best known for their privacy efforts in the community.
+We chose Gecko due to its position as the best competitor to Chromium, and because it’s developed by Mozilla, who are best known for their privacy efforts in the community.
 
 ## ❗ Issues / Support
 
-You can create issues [here](https://github.com/dothq/browser/issues/new) or get support from our discord server, by clicking the banner below.
+You can create issues [here](https://github.com/dothq/browser/issues/new) or get support from our discord server, which you can join by clicking the banner below.
 
 <a href="https://invite.gg/dot">
   <img src="https://discordapp.com/api/guilds/525056817399726102/widget.png?style=banner2" />
